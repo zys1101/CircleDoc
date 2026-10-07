@@ -1,0 +1,143 @@
+{
+  "generator": {
+    "tool": "tools/gen_samples.py",
+    "version": "1.0",
+    "generated_at": "2026-10-05T14:13:00+00:00",
+    "method": "等时圈由本项目的扇形采样 + 二分收敛算法配合确定性合成速度场（三次谐波各向异性 + 一条顺畅走廊 + 两道阻隔扇区，种子取自中心点坐标）算出；设施点由 POI 维度词表按虚构网格外推。**不含任何百度地图返回内容。**",
+    "deterministic": true,
+    "seed_source": "center_coordinates",
+    "parameters": {
+      "minutes": 15.0,
+      "modes": [
+        "walking"
+      ],
+      "platform": "desktop",
+      "data_mode": "mock",
+      "dimensions": [
+        "medical",
+        "education",
+        "market",
+        "leisure",
+        "transit",
+        "food",
+        "service_ref"
+      ]
+    }
+  },
+  "community": {
+    "id": "beijing-jiaodaokou",
+    "name": "交道口街道（成熟老城社区）",
+    "city": "北京",
+    "district": "东城区",
+    "lnglat": [
+      116.412,
+      39.944
+    ],
+    "form": "成熟老城社区",
+    "archetype": "old_town",
+    "coord_verified": false,
+    "coordinate_system": "bd09ll",
+    "note": "老城胡同片区，配套成熟、设施密度高，用作「达标样本」。 坐标待用 /api/suggest 核验后回填。\n"
+  },
+  "baseline": {
+    "score": {
+      "total": 96.2,
+      "grade": "A",
+      "radar": {
+        "medical": 100.0,
+        "education": 100.0,
+        "shopping": 100.0,
+        "leisure": 100.0,
+        "transit": 100.0,
+        "food": 100.0
+      },
+      "penalty": -3.8,
+      "blind_area_pct": 7.5905,
+      "weight_sum": 0.95,
+      "normalized": true,
+      "reference_only": [
+        "convenience"
+      ]
+    },
+    "counts_in": {
+      "medical": 6,
+      "education": 4,
+      "shopping": 9,
+      "leisure": 4,
+      "transit": 8,
+      "food": 10,
+      "convenience": 7
+    },
+    "nearest_minutes": {
+      "medical": 2.05,
+      "education": 2.26,
+      "shopping": 2.67,
+      "leisure": 2.85,
+      "transit": 2.26,
+      "food": 2.62,
+      "convenience": 2.05
+    },
+    "blind_spots": {
+      "count": 4,
+      "area_pct": 7.5905,
+      "area_km2": 0.25,
+      "levels": {
+        "blind": 2,
+        "insufficient": 2
+      },
+      "missing": [
+        "market",
+        "pharmacy",
+        "primary_school"
+      ]
+    },
+    "usage": {
+      "http_requests": 0,
+      "quota_units": 0,
+      "place_calls": 0,
+      "cache_hits": 0,
+      "batches_sent": 0,
+      "budget_stops": 0,
+      "route_lines": {
+        "walking": 0,
+        "riding": 0
+      },
+      "route_lines_total": 0,
+      "stages": {
+        "isochrone:walking": {
+          "http_requests": 0,
+          "quota_units": 0,
+          "place_calls": 0,
+          "cache_hits": 0,
+          "batches_sent": 0,
+          "budget_stops": 0
+        },
+        "poi": {
+          "http_requests": 0,
+          "quota_units": 0,
+          "place_calls": 0,
+          "cache_hits": 0
+        },
+        "coverage": {
+          "http_requests": 0,
+          "quota_units": 0,
+          "place_calls": 0,
+          "cache_hits": 0,
+          "batches_sent": 0,
+          "budget_stops": 0
+        },
+        "blind_spots": {
+          "http_requests": 0,
+          "quota_units": 0,
+          "place_calls": 0
+        }
+      }
+    },
+    "summary": [
+      "最弱项：基础医疗 100 分，圈内 6 个、达标阈值 2 个，是本次最该优先补齐的方向。",
+      "服务盲区：识别到 4 处，占圈内面积 7.5905%（按 1000 m 半径判定），缺失类别：market, pharmacy, primary_school。",
+      "实测覆盖：6 个点位有实测时间、35 个未实测（前 K 截断 / 圈外 / 探测器不可用）；未实测点位不参与时效评分。",
+      "数据来源：本次结论基于程序合成的示例数据（mock_mode），不是实时路网与实时检索结果，仅作辅助性量化参考。"
+    ]
+  }
+}

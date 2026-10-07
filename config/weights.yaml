@@ -1,0 +1,92 @@
+# CircleDoc 评分权重表（PRD §4.5）—— 唯一出处
+#
+# 谁读这个文件：`services/score.py:load_score_config()`，被 `/api/analysis` 与
+#              `tools/gen_samples.py` 共用。缺失 / 读坏时**回落到内置默认值并留一条
+#              note**，不会让体检变成错误页（FR-403 的同一取舍）。
+#
+# PRD §4.5 原话：「权重表以配置文件（config/weights.yaml）外置，README 中说明这是
+# 产品假设而非国标，避免被质疑权威性。」—— 所以这个文件的存在本身就是交付项之一。
+#
+# ---------------------------------------------------------------------------------------
+# 🔴 normalize_weights：PRD §4.3 与 §4.5 之间那个真实缺口的开关
+# ---------------------------------------------------------------------------------------
+# §4.3 的权重表是 20+15+20+15+15+10 = 95 %，不是 100 %；而 §4.5 的等级线
+# A ≥ 85 / B 70~84 / C 55~69 / D < 55 是写在 0~100 刻度上的。两种读法都自洽：
+#
+#   true （当前取值，推荐）总分 = Σ(S_i × w_i) / Σw_i   → 满分 100，A 线就是字面的 85 分
+#   false（字面口径）      总分 = Σ(S_i × w_i)          → 满分只有 95，A 线实际是「达到上限的 89.5 %」
+#
+# 取 true 的理由：那个 89.5 % 在任何一处文档里都没写过，是从缺口里长出来的第二个隐含假设。
+# 无论取哪个，响应里都会同时给出 `total`、`total_raw`、`weight_sum` 与 `grade_basis`，
+# 评审按哪种口径都能复算，不会出现「一个对不上的数」。
+#
+# ---------------------------------------------------------------------------------------
+# 🔴 这是**产品假设**，不是国家标准
+# ---------------------------------------------------------------------------------------
+# 权重与达标阈值的依据是 PRD §4.3 表格，而那张表是产品侧假设（PRD §10-3 明确登记为待确认项：
+# 若有「15 分钟便民生活圈」地方标准文件，可替换为官方指标）。替换时**不要只改这里**——
+# 地方标准的指标口径可能与「官方 POI 分类计数」不一致，PRD §10-3 要求一并重写 §4.5 的
+# 阈值推导，`services/poi_categories.py` 的 `SCORED_WEIGHT_SUM` 断言也要同步。
+
+normalize_weights: true
+
+# 六个计分维度 + 一个不计分的参考项（便民服务只列明细表，权重恒为 0）。
+# 这里的 weight / threshold_count / threshold_minutes 与
+# `services/poi_categories.py:DIMENSIONS` 和 `services/coverage.py:DEFAULT_THRESHOLDS` 同源；
+# 三处各有一份是有意的 —— POI 层要用它决定检索什么，评分层要用它决定怎么给分。
+# 改动请三处一起改，并跑 `pytest tests/test_score.py tests/test_poi_categories.py`。
+dimensions:
+  medical:            # 基础医疗   医疗 > 药店 / 综合医院 / 诊所
+    weight: 0.20
+    threshold_count: 2
+    threshold_minutes: 8.0
+  education:          # 教育       教育培训 > 小学 / 幼儿园
+    weight: 0.15
+    threshold_count: 1
+    threshold_minutes: 12.0
+  market:             # 购物市场   购物 > 市场 / 超市 / 便利店
+    weight: 0.20
+    threshold_count: 3
+    threshold_minutes: 8.0
+  leisure:            # 养老休闲   公园 / 休闲广场 / 健身中心 / 疗养院
+    weight: 0.15
+    threshold_count: 1
+    threshold_minutes: 10.0
+  transit:            # 公共交通   公交车站 / 地铁站（阈值口径是「公交车站 ≥ 2」，见 PRD §4.3）
+    weight: 0.15
+    threshold_count: 2
+    threshold_minutes: 5.0
+  food:               # 餐饮服务   美食 > 中餐厅 / 小吃快餐店
+    weight: 0.10
+    threshold_count: 5
+    threshold_minutes: 10.0
+  service_ref:        # 便民服务（参考项）不计分、只进明细表
+    weight: 0.0
+    threshold_count: 0
+    threshold_minutes: 10.0
+
+# 总分等级线（PRD §4.5）。键名即等级，值为**下界**（含）。写成映射而不是列表，
+# 是为了让「A ≥ 85」这句话在文件里读起来和人话一致；读取时会按值从高到低排序。
+grades:
+  A: 85
+  B: 70
+  C: 55
+  D: 0
+
+# 盲区惩罚（PRD §4.5 末行）：每 1 % 圈内面积被标记为**完全盲区**扣 0.5 分，最多扣 15。
+# `area_pct` 只统计 level == "blind"（三类皆无），不把「配套不足」计进去 —— 计进去会虚增盲区面积。
+blind_spot_penalty:
+  per_pct: 0.5
+  cap: 15.0
+
+# ⚠️ `T_理想` 是 PRD 的真实缺口：§4.5 只给了关系式 `T_理想 = 阈值时间 × 0.5`，
+# §4.3 的阈值表里**没有任何一处给出逐维度的 T_理想 数值**。所以它是显式可配置参数：
+#   ratio   —— 全局比例（下面这个 0.5 就是 §4.5 那半句的取值）
+#   minutes —— 逐维度覆盖，优先级高于 ratio；留空表示全部按 ratio 走
+# 输出的 `t_ideal_source` 会如实标注每个维度实际用了哪一种来源，不伪装成 PRD 定稿数字。
+t_ideal:
+  ratio: 0.5
+  minutes: {}
+
+# FR-304 要求报告摘要 3~5 条，这里给上界。
+summary_max: 5

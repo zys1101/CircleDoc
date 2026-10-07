@@ -1,0 +1,622 @@
+/* CircleDoc M2：等时圈地图页样式（web/isochrone.css）
+   🔴 零外链（R12）：不引外部字体、不引任何 CDN；配色沿用首页 app.css 的 token，
+   只在 .page-map 作用域内补地图页专用的变量。降级用的是「警示」而不是「报错」，
+   所以这里刻意没有 red/danger 级别的状态色——红色只出现在热力图的「耗时长」一端。 */
+
+.page-map {
+  --poly: #2d5f8f;
+  --poly-fill: rgba(95, 168, 216, 0.25);
+  --poly-riding: #2f6f4f;
+  --real-path: #b45309;
+  --stage-bg: #eef1f5;
+  --stage-line: #d7dde6;
+  --ink-strong: #10141c;
+}
+
+/* 首页顶栏多出来的「地图引擎」徽标：一眼看出现在是真图还是示意图。 */
+.engine {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 13px;
+}
+
+.engine[data-engine="live"] {
+  border-color: var(--ok-line);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.engine[data-engine="loading"] {
+  color: var(--muted);
+}
+
+.engine[data-engine="failed"] {
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.back {
+  margin-right: 10px;
+}
+
+/* FR-206：第二轮之前的配额提示条（警示色，不用报错色）。 */
+.notice {
+  margin: 16px 20px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--warn-line);
+  border-left: 4px solid var(--warn);
+  border-radius: 10px;
+  background: var(--warn-bg);
+}
+
+.notice h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--warn);
+}
+
+.notice p {
+  margin: 4px 0;
+  font-size: 14px;
+}
+
+.notice code {
+  font-size: 13px;
+}
+
+/* 桌面三栏：参数 / 地图 / 读数。窄屏改纵向堆叠（FR-106 的抽屉形态是 M4 的活）。 */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(280px, 360px);
+  gap: 12px;
+  align-items: start;
+  padding: 16px 20px 8px;
+}
+
+.panel {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.panel h2 {
+  margin: 14px 0 6px;
+  font-size: 15px;
+}
+
+.panel h2:first-child {
+  margin-top: 0;
+}
+
+fieldset {
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+fieldset.nested {
+  margin-top: 10px;
+  background: var(--bg);
+}
+
+legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.field {
+  display: block;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.field > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+
+input[type="text"],
+select {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+
+.page-map button.tiny {
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.page-map button.primary {
+  border-color: var(--poly);
+  background: var(--poly);
+  color: #fff;
+}
+
+.page-map button.on {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.check input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+/* 舞台：SVG 与 JSAPI 容器叠在同一块定位区里，永远只有一个可见。 */
+.stage-area {
+  position: relative;
+  height: clamp(320px, 58vh, 620px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--stage-bg);
+  overflow: hidden;
+}
+
+#stage,
+#map-live {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#stage {
+  touch-action: none; /* R15：手势交给 pointer 事件，不让浏览器抢去滚动 */
+  cursor: crosshair;
+}
+
+#map-live {
+  background: #dfe6ee;
+}
+
+.stage-tag {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 4px 10px;
+  border: 1px solid var(--warn-line);
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stage-hint {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.86);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tooltip {
+  position: absolute;
+  z-index: 3;
+  max-width: 280px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 6px 20px rgba(16, 20, 28, 0.16);
+  font-size: 13px;
+}
+
+.tooltip h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--ink-strong);
+}
+
+.tooltip ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.tooltip li {
+  margin: 2px 0;
+}
+
+/* SVG 图层 */
+.grid-line {
+  stroke: var(--stage-line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.grid-label {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.ref-circle {
+  fill: none;
+  stroke: #9aa3af;
+  stroke-style: dashed;
+  stroke-dasharray: 6 6;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.heat-cell {
+  stroke: rgba(16, 20, 28, 0.08);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.poly {
+  fill: var(--poly-fill);
+  stroke: var(--poly);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.poly-riding {
+  fill: rgba(87, 183, 138, 0.24);
+  stroke: var(--poly-riding);
+}
+
+#g-other .poly {
+  stroke-dasharray: 7 5;
+  fill-opacity: 0.4;
+}
+
+.vertex {
+  fill: #fff;
+  stroke: var(--poly);
+  stroke-width: 2;
+  cursor: pointer;
+  vector-effect: non-scaling-stroke;
+}
+
+/* --- FR-222 盲区图层 --------------------------------------------------------------------- */
+/* 填充与描边由 JS 按 level 内联写入（与 JSAPI 那条路径共用同一份 BLIND_STYLE），
+   这里只补交互态 —— 两处各写一份配色迟早会分叉。 */
+.blind-block {
+  cursor: pointer;
+}
+
+.blind-block:hover,
+.blind-block:focus {
+  fill-opacity: 0.65;
+  stroke-width: 2.5;
+  outline: none;
+}
+
+/* --- FR-212 POI 图层 --------------------------------------------------------------------- */
+.poi {
+  cursor: pointer;
+}
+
+.poi:hover > *,
+.poi:focus > * {
+  stroke: #111827;
+  stroke-width: 2;
+  outline: none;
+}
+
+/* 图例里的形状小样：固定 14×14，与地图上的缩放无关。 */
+.poi-swatch {
+  vertical-align: -2px;
+  margin-right: 6px;
+}
+
+.legend-pois li {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 14px;
+}
+
+.vertex:hover,
+.vertex:focus {
+  stroke: var(--ink-strong);
+  outline: none;
+}
+
+.vertex.sample-blocked_official {
+  fill: #6b7280;
+  stroke: #3f4652;
+}
+
+.vertex.sample-blocked_timeout {
+  fill: #fff7e6;
+  stroke: #a9640a;
+  stroke-dasharray: 3 3;
+}
+
+.vertex.sample-interpolated {
+  fill: #eef1f5;
+}
+
+.vertex.sample-extrapolated {
+  stroke-dasharray: 3 3;
+}
+
+.real-path {
+  fill: none;
+  stroke: var(--real-path);
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.9;
+}
+
+.cross {
+  stroke: var(--ink-strong);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.center-dot {
+  fill: var(--ink-strong);
+  stroke: #fff;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 图例 */
+.legend {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  font-size: 12px;
+}
+
+.legend-list,
+.sample-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.chip b {
+  font-size: 11px;
+  color: var(--ink-strong);
+}
+
+.legend-h {
+  margin: 10px 0 6px;
+  color: var(--muted);
+}
+
+.swatch {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
+  border: 1px solid var(--poly);
+  border-radius: 2px;
+  background: var(--poly-fill);
+}
+
+.swatch-other {
+  border-style: dashed;
+  border-color: var(--poly-riding);
+}
+
+.swatch-vertex {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.swatch-heat {
+  border-color: #a9640a;
+  background: linear-gradient(90deg, #35c46b, #e6c22e, #d9534f);
+}
+
+.swatch-ref {
+  border-style: dashed;
+  border-color: #9aa3af;
+  background: transparent;
+}
+
+.swatch-center {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border-color: var(--ink-strong);
+  background: var(--ink-strong);
+}
+
+/* FR-222 的两级阈值图例色块（与 JS 的 BLIND_STYLE 同色） */
+.swatch-blind {
+  border-color: #4a4a4a;
+  background: rgba(110, 110, 110, 0.45);
+}
+
+.swatch-insufficient {
+  border-color: #a86400;
+  background: rgba(209, 134, 22, 0.3);
+}
+
+/* 进度条（FR-205）：只做「已测/总数」的可视化，不承诺流式精度。 */
+.meter {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.bar {
+  height: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  background: var(--poly);
+}
+
+#progress-stages {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+dl.meta {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  font-size: 13px;
+}
+
+dl.meta dt {
+  color: var(--muted);
+}
+
+dl.meta dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+dl.meta dd.empty {
+  color: var(--muted);
+}
+
+table.usage,
+table.vertices {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+table.usage td,
+table.vertices td,
+table.vertices th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+table.usage td.metric {
+  font-family: ui-monospace, Consolas, monospace;
+  white-space: nowrap;
+}
+
+table.usage td.value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 配额两栏（quota_units / http_requests）加粗：这是 PRD 第 267 行的验收点。 */
+table.usage tr.key td {
+  font-weight: 600;
+}
+
+table.usage tr.key td.metric {
+  color: var(--poly);
+}
+
+table.vertices th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+table.vertices td.sample .raw {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+table.vertices td.sample.sample-blocked_official div:first-child {
+  color: #4b5563;
+}
+
+table.vertices td.sample.sample-blocked_timeout div:first-child {
+  color: var(--warn);
+}
+
+.page-foot {
+  padding: 0 20px 24px;
+}
+
+@media (max-width: 1100px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dl.meta {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .layout,
+  .notice {
+    padding-left: 12px;
+    padding-right: 12px;
+    margin-left: 12px;
+    margin-right: 12px;
+  }
+
+  .stage-area {
+    height: 340px;
+  }
+
+  input[type="text"],
+  select,
+  .page-map button {
+    min-height: 44px; /* FR-106：点击热区 ≥ 44 px */
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "input": {
+    "destinations": 96,
+    "origin": {
+      "lng": 116.404,
+      "lat": 39.915
+    }
+  },
+  "assumptions": {
+    "rtt_ms": 120.0,
+    "model_qps": 2.5,
+    "experiment_qps": 1000.0,
+    "note": "rtt_ms 与 model_qps 是显式假设参数，不是测出来的；线上墙钟耗时为推算值。实验本身跑在超高 QPS 的假桶上（为了不被真桶拖成 38 秒），但推算一律用真实档位。本脚本零真实出网（MockTransport 不建连接、AK 为假串），因为条款 3.2.3(ii) 禁止对百度线上服务施压测试。"
+  },
+  "serial": {
+    "strategy": "serial_direction",
+    "elapsed_local_s": 0.0246,
+    "http_requests": 96,
+    "quota_units": 96,
+    "route_lines": {
+      "walking": 96,
+      "riding": 0
+    },
+    "usage": {
+      "label": "bench-serial",
+      "place_calls": 0,
+      "quota_units": 96,
+      "http_requests": 96,
+      "cache_hits": 0,
+      "cache_misses": 0,
+      "degraded_count": 0,
+      "quota_units_by_mode": {
+        "walking": 96,
+        "riding": 0
+      },
+      "route_lines": {
+        "walking": 96,
+        "riding": 0
+      },
+      "by_service": {
+        "route": {
+          "place_calls": 0,
+          "quota_units": 96,
+          "http_requests": 96
+        }
+      }
+    }
+  },
+  "matrix": {
+    "strategy": "batch_routematrix",
+    "elapsed_local_s": 0.0015,
+    "http_requests": 2,
+    "quota_units": 96,
+    "route_lines": {
+      "walking": 96,
+      "riding": 0
+    },
+    "batch_sizes": [
+      50,
+      46
+    ],
+    "usage": {
+      "label": "bench-matrix",
+      "place_calls": 0,
+      "quota_units": 96,
+      "http_requests": 2,
+      "cache_hits": 0,
+      "cache_misses": 0,
+      "degraded_count": 0,
+      "quota_units_by_mode": {
+        "walking": 96,
+        "riding": 0
+      },
+      "route_lines": {
+        "walking": 96,
+        "riding": 0
+      },
+      "by_service": {
+        "route": {
+          "place_calls": 0,
+          "quota_units": 96,
+          "http_requests": 2
+        }
+      }
+    }
+  },
+  "comparison": {
+    "http_requests_serial": 96,
+    "http_requests_matrix": 2,
+    "http_requests_ratio": 48.0,
+    "quota_units_serial": 96,
+    "quota_units_matrix": 96,
+    "quota_units_identical": true,
+    "modeled_wall_serial_s": 38.4,
+    "modeled_wall_matrix_s": 0.8,
+    "modeled_speedup": 48.0
+  },
+  "budget_experiment": {
+    "http_budget": 20,
+    "requested_destinations": 96,
+    "serial_completed_http": 20,
+    "serial_completed_quota_units": 20,
+    "serial_completion_ratio": 0.2083,
+    "serial_degraded": 76,
+    "matrix_completed_http": 2,
+    "matrix_completed_quota_units": 96,
+    "matrix_full_coverage": true,
+    "verdict": "串行在 §6.1 的 20 次出网预算内只能完成一部分目的地；批量算路在同样预算内覆盖全部目的地。批量省的是往返，不是配额。"
+  },
+  "rate_limit": {
+    "qps": 0.5,
+    "requests": 20,
+    "burst": 1,
+    "rtt_ms": 120.0,
+    "elapsed_s": 38.069,
+    "expected_queue_s": 38.0,
+    "requests_that_passed": 20,
+    "requests_that_waited": 19,
+    "first_waits_s": [
+      2.0,
+      2.0,
+      2.0
+    ],
+    "max_wait_s": 2.0,
+    "http_requests": 20,
+    "quota_units": 20,
+    "no_bypass": true
+  },
+  "realistic_load": {
+    "note": "等时圈一次采样约 96 条路线（PRD §4.2）。",
+    "serial_http_requests": 96,
+    "matrix_http_requests": 2,
+    "quota_units": 96,
+    "modeled_wall_serial_s": 38.4,
+    "modeled_wall_matrix_s": 0.8
+  }
+}

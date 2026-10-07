@@ -1,0 +1,54 @@
+# CircleDoc 的工具链配置（ruff + black + pytest）。
+#
+# 这里刻意不写 `[project]` 表：本项目不做 pip 打包安装，依赖的唯一出处是
+# requirements.txt（本机 venv 与 Docker 镜像都读它）。写一个 `dependencies = []` 的
+# `[project]` 只会诱导 `pip install -e .` 装出一个空壳环境。
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["api", "services", "infra", "tests", "config"]
+# docs/ 是文档、web/ 是随镜像分发的 vendored 前端资源（无构建链），都不该被 Python lint 碰。
+exclude = [".venv", "docs", "web", "__pycache__"]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle 错误
+  "W",   # pycodestyle 警告（行尾空格之类）
+  "F",   # pyflakes：未使用导入、未定义名
+  "I",   # isort：导入分组顺序统一，属于 PRD §6.4「命名一致」
+  "N",   # pep8-naming
+  "UP",  # pyupgrade：锁定 py311，允许 `X | None` 等新写法
+  "B",   # bugbear：真正的逻辑坑（可变默认值、循环变量捕获……）
+  "C4",  # comprehensions
+  "SIM", # simplify
+  "RUF", # ruff 自有规则
+]
+ignore = [
+  # 本项目的注释、docstring 与前端文案都是中文，全角标点（：（），）会被判成
+  # 「易混淆 Unicode 字符」。这不是缺陷而是语言要求，关掉以免逼大家把中文写成半角。
+  "RUF001",
+  "RUF002",
+  "RUF003",
+  # FastAPI 的 Depends(...) 写在默认参数上是官方标准写法，不是 bugbear 说的可变默认值。
+  "B008",
+  # 异常类按业务语义命名（`BaiduConcurrencyLimited`、`RouteUnreachable`），基类
+  # `CircleDocError` / `BaiduApiError` 已带 Error 后缀；强制每条都加一遍只会让
+  # FR-404 那六类的名字变得读不下去。
+  "N818",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 包的 __init__.py 里的 re-export 是刻意的，F401 会把它判成未使用导入。
+"__init__.py" = ["F401"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+# black 的这个选项是正则，匹配相对根目录的路径；要和上面的 ruff exclude 保持一致。
+extend-exclude = "^(\\.venv|docs|web|data)/"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 让不带 `-m` 的 `pytest` 在项目根也能 import 到 api / infra / services。
+pythonpath = ["."]

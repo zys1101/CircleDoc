@@ -1,0 +1,77 @@
+# CircleDoc 预置样例社区清单（FR-102）—— 唯一出处
+#
+# 谁读这个文件：`services/samples.py:load_samples()` → `/api/samples`（前端下拉）
+#              与 `tools/gen_samples.py`（合成数据集生成器）。
+# 谁不读：业务逻辑。清单只描述「用哪个中心点、属于哪种建成形态」，不承载任何结论。
+#
+# ---------------------------------------------------------------------------------------
+# 🔴 关于坐标：本轮**未实调核验**，全部标 `coord_verified: false`
+# ---------------------------------------------------------------------------------------
+# PRD §10-1 规程② 写明「坐标一律不凭记忆写死」——必须用 `/api/suggest` 或前端点图取到
+# BD09LL 后回填，人工核对无误再提交。本项目当前没有可用的百度 AK，因此**无法完成这一步**。
+#
+# 所以本文件的处理是：
+#   * `name` / `district` / `form` 是可信的（社区与行政区属实）；
+#   * `lnglat` 是**区级近似占位**，只保证落在正确的行政区与境内，够离线演示用；
+#   * `coord_verified: false` 如实标记，`/api/samples` 会把这个字段原样透出，
+#     README《已知局限》与演示脚本据此说明，**不假装已核验**。
+#
+# 回填方法（拿到 AK 后，二选一）：
+#   1) `python tools/gen_samples.py --verify`（走 `/api/suggest` + `/api/regeo`，会把
+#      取到的坐标与结构化地址写回本文件，并把 `coord_verified` 置 true）
+#   2) 前端点图 → 从坐标框复制 → 手工替换 `lnglat` → 把 `coord_verified` 改成 true
+#
+# ---------------------------------------------------------------------------------------
+# 三个社区的选取标准（PRD FR-102）
+# ---------------------------------------------------------------------------------------
+# 同一座城市内**三种建成形态各一**，且圈内设施计数与盲区面积要有肉眼可辨的差异，
+# 否则样例失去展示价值。差异由 `archetype` 指向的合成画像保证（services/poi_search.py）：
+#
+#   old_town          配套密集（药店/小学/市场都在）      → 盲区少、总分高
+#   new_district      只有零星便利店与公交站              → 缺 1~2 类，命中 FR-224「配套不足」
+#   transit_corridor  轨交枢纽但生活配套几乎为零          → 三类皆无，命中 FR-221「完全盲区」
+#
+# 第三个形态对应命题里的「城中村或老旧小区」：那类地方的特征正是「能上车、买不到菜」，
+# 与 `transit_corridor` 画像一致，因此复用该画像而不是新造一个。
+
+city: 北京
+coordinate_system: bd09ll
+verified_at: null
+# `verified_at` 填 ISO 日期，例如 2026-10-06。全部核验完再填，别提前写。
+
+communities:
+  - id: beijing-jiaodaokou
+    name: 交道口街道（成熟老城社区）
+    city: 北京
+    district: 东城区
+    lnglat: [116.4120, 39.9440]
+    form: 成熟老城社区
+    archetype: old_town
+    coord_verified: false
+    note: >
+      老城胡同片区，配套成熟、设施密度高，用作「达标样本」。
+      坐标待用 /api/suggest 核验后回填。
+
+  - id: beijing-tiantongyuan
+    name: 天通苑（新建大盘社区）
+    city: 北京
+    district: 昌平区
+    lnglat: [116.4180, 40.0750]
+    form: 新建大盘社区
+    archetype: new_district
+    coord_verified: false
+    note: >
+      超大型新建居住区，生活配套沿主路带状分布，内部存在「配套不足」区域。
+      坐标待用 /api/suggest 核验后回填。
+
+  - id: beijing-xiaojiahe
+    name: 肖家河（城中村 / 老旧小区）
+    city: 北京
+    district: 海淀区
+    lnglat: [116.2830, 40.0360]
+    form: 城中村 / 老旧小区
+    archetype: transit_corridor
+    coord_verified: false
+    note: >
+      城乡结合部，居住密度高但市场 / 药店 / 小学三类基础配套缺失，用作「完全盲区样本」。
+      坐标待用 /api/suggest 核验后回填。

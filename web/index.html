@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CircleDoc · 15 分钟生活圈体检</title>
+    <!--
+      🔴 零外链（PRD R12）：这一页不引用任何公网 CDN，也不加载百度 JSAPI。
+      演示现场断网时 JSAPI 会拖垮整页，而首页唯一的职责是「证明零配置也能起、
+      并且把当前数据模式说清楚」。Vue / ECharts 等 vendored 资源由 M4 再引入。
+    -->
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <header class="page-head">
+      <h1>15 分钟生活圈体检</h1>
+      <p class="sub" id="app-name">CircleDoc</p>
+      <div class="mode" id="mode-badge" data-mode="unknown">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="mode-text">数据模式：读取中…</span>
+      </div>
+    </header>
+
+    <!-- FR-105 / §4.6：非实时时必须有横幅说明「为什么不是实时数据」，而不是报错页。 -->
+    <section class="banner" id="banner" hidden aria-live="polite">
+      <h2 id="banner-title">实时服务不可用，当前为离线报告模式</h2>
+      <p id="banner-message"></p>
+      <ul id="banner-details"></ul>
+      <p class="cta" id="banner-cta"></p>
+      <p class="cta" id="banner-retry"></p>
+    </section>
+
+    <main>
+      <section class="card">
+        <h2>服务探测</h2>
+        <p class="hint" id="probe-meta">正在读取 /api/health…</p>
+        <div class="table-wrap">
+          <table class="svc">
+            <thead>
+              <tr>
+                <th scope="col">服务</th>
+                <th scope="col">状态</th>
+                <th scope="col">官方码</th>
+                <th scope="col">说明与处置</th>
+              </tr>
+            </thead>
+            <tbody id="services">
+              <tr>
+                <td colspan="4">读取中…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="actions">
+          <button type="button" id="reprobe">重新探测</button>
+          <span class="hint" id="reprobe-hint">
+            会真的向百度发探测请求（每服务 1 次、不重试）；仅在刚改过控制台开关后使用。
+          </span>
+        </p>
+      </section>
+
+      <noscript>
+        <p class="banner-static">
+          未启用 JavaScript：请直接访问 <code>/api/health</code> 查看当前数据模式与探测结论。
+        </p>
+      </noscript>
+
+      <footer class="page-foot">
+        <a href="/api/docs">接口文档</a>
+        <a href="/api/health">健康探测</a>
+        <a href="/api/cache/stats">缓存统计</a>
+        <!-- M2：等时圈地图页（同目录零外链；JSAPI 只在该页运行时按需注入，可降级） -->
+        <a href="./isochrone.html">等时圈地图（FR-201~206）</a>
+        <span id="checked-at"></span>
+      </footer>
+    </main>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>

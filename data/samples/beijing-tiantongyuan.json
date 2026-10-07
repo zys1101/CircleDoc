@@ -1,0 +1,144 @@
+{
+  "generator": {
+    "tool": "tools/gen_samples.py",
+    "version": "1.0",
+    "generated_at": "2026-10-05T14:13:00+00:00",
+    "method": "等时圈由本项目的扇形采样 + 二分收敛算法配合确定性合成速度场（三次谐波各向异性 + 一条顺畅走廊 + 两道阻隔扇区，种子取自中心点坐标）算出；设施点由 POI 维度词表按虚构网格外推。**不含任何百度地图返回内容。**",
+    "deterministic": true,
+    "seed_source": "center_coordinates",
+    "parameters": {
+      "minutes": 15.0,
+      "modes": [
+        "walking"
+      ],
+      "platform": "desktop",
+      "data_mode": "mock",
+      "dimensions": [
+        "medical",
+        "education",
+        "market",
+        "leisure",
+        "transit",
+        "food",
+        "service_ref"
+      ]
+    }
+  },
+  "community": {
+    "id": "beijing-tiantongyuan",
+    "name": "天通苑（新建大盘社区）",
+    "city": "北京",
+    "district": "昌平区",
+    "lnglat": [
+      116.418,
+      40.075
+    ],
+    "form": "新建大盘社区",
+    "archetype": "new_district",
+    "coord_verified": false,
+    "coordinate_system": "bd09ll",
+    "note": "超大型新建居住区，生活配套沿主路带状分布，内部存在「配套不足」区域。 坐标待用 /api/suggest 核验后回填。\n"
+  },
+  "baseline": {
+    "score": {
+      "total": 84.66,
+      "grade": "B",
+      "radar": {
+        "medical": 74.09,
+        "education": 100.0,
+        "shopping": 100.0,
+        "leisure": 100.0,
+        "transit": 95.76,
+        "food": 100.0
+      },
+      "penalty": -9.22,
+      "blind_area_pct": 18.4396,
+      "weight_sum": 0.95,
+      "normalized": true,
+      "reference_only": [
+        "convenience"
+      ]
+    },
+    "counts_in": {
+      "medical": 1,
+      "education": 1,
+      "shopping": 3,
+      "leisure": 1,
+      "transit": 2,
+      "food": 5,
+      "convenience": 1
+    },
+    "nearest_minutes": {
+      "medical": 4.2,
+      "education": 3.56,
+      "shopping": 2.7,
+      "leisure": 2.91,
+      "transit": 3.56,
+      "food": 2.7,
+      "convenience": 2.91
+    },
+    "blind_spots": {
+      "count": 2,
+      "area_pct": 18.4396,
+      "area_km2": 0.5,
+      "levels": {
+        "blind": 1,
+        "insufficient": 1
+      },
+      "missing": [
+        "market",
+        "pharmacy",
+        "primary_school"
+      ]
+    },
+    "usage": {
+      "http_requests": 0,
+      "quota_units": 0,
+      "place_calls": 0,
+      "cache_hits": 0,
+      "batches_sent": 0,
+      "budget_stops": 0,
+      "route_lines": {
+        "walking": 0,
+        "riding": 0
+      },
+      "route_lines_total": 0,
+      "stages": {
+        "isochrone:walking": {
+          "http_requests": 0,
+          "quota_units": 0,
+          "place_calls": 0,
+          "cache_hits": 0,
+          "batches_sent": 0,
+          "budget_stops": 0
+        },
+        "poi": {
+          "http_requests": 0,
+          "quota_units": 0,
+          "place_calls": 0,
+          "cache_hits": 0
+        },
+        "coverage": {
+          "http_requests": 0,
+          "quota_units": 0,
+          "place_calls": 0,
+          "cache_hits": 0,
+          "batches_sent": 0,
+          "budget_stops": 0
+        },
+        "blind_spots": {
+          "http_requests": 0,
+          "quota_units": 0,
+          "place_calls": 0
+        }
+      }
+    },
+    "summary": [
+      "最弱项：基础医疗 74.09 分，圈内 1 个、达标阈值 2 个，是本次最该优先补齐的方向。",
+      "最强项：教育 100 分（配套充足），圈内 1 个、达标阈值 1 个。",
+      "服务盲区：识别到 2 处，占圈内面积 18.4396%（按 1000 m 半径判定），缺失类别：market, pharmacy, primary_school。",
+      "实测覆盖：11 个点位有实测时间、2 个未实测（前 K 截断 / 圈外 / 探测器不可用）；未实测点位不参与时效评分。",
+      "数据来源：本次结论基于程序合成的示例数据（mock_mode），不是实时路网与实时检索结果，仅作辅助性量化参考。"
+    ]
+  }
+}

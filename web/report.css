@@ -1,0 +1,386 @@
+/*
+ * web/report.css —— M4 体检报告面板样式（FR-301 ~ FR-306）。
+ *
+ * 三条纪律：
+ *   1. 零外部字体 / 零图片 / 零 CDN（R12）：只用系统字体与纯 CSS 画出的斜纹，
+ *      总资源可控，断网时不会因为一个字体请求把整块报告拖成半成品。
+ *   2. 图表是手绘 SVG（见 report.js 的说明），所以这里只给 class 上色，
+ *      不给任何图表库留钩子。
+ *   3. 颜色不是唯一信息通道：盲区/配套不足、超阈值柱、未实测柱都同时有**文字**标注，
+ *      色盲与黑白打印下依然可读（§6.3 的可读性要求）。
+ */
+
+#report .report-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+#report .report-head h2 {
+  margin: 0;
+}
+
+/* FR-306 数据来源徽标：live / cache / sample 三态必须一眼可分。 */
+.source-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid currentColor;
+}
+
+.source-badge[data-source="live"] {
+  color: #1a7f37;
+}
+
+.source-badge[data-source="cache"] {
+  color: #9a6700;
+}
+
+.source-badge[data-source="sample"] {
+  color: #8250df;
+}
+
+/* --- 评分卡 ----------------------------------------------------------------------------- */
+.score-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #d8dee4);
+  border-radius: 10px;
+  background: var(--card-bg, #fbfcfd);
+  margin-bottom: 12px;
+}
+
+.score-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  line-height: 1;
+}
+
+.score-value {
+  font-size: 40px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-grade {
+  font-size: 26px;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 8px;
+  border: 2px solid currentColor;
+}
+
+.score-unit {
+  font-size: 13px;
+  opacity: 0.65;
+}
+
+.score-main[data-grade="A"] .score-grade {
+  color: #1a7f37;
+}
+.score-main[data-grade="B"] .score-grade {
+  color: #0969da;
+}
+.score-main[data-grade="C"] .score-grade {
+  color: #9a6700;
+}
+.score-main[data-grade="D"] .score-grade {
+  color: #cf222e;
+}
+
+.score-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.score-facts dt {
+  font-weight: 600;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.score-facts dd {
+  margin: 0;
+}
+
+/* --- 图表 ------------------------------------------------------------------------------- */
+.charts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.chart-box {
+  flex: 1 1 320px;
+  min-width: 280px;
+}
+
+.chart-box h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+/* 雷达图 */
+.radar-grid {
+  stroke: var(--line, #d8dee4);
+  stroke-width: 1;
+}
+
+.radar-axis {
+  stroke: var(--line, #d8dee4);
+  stroke-width: 1;
+}
+
+.radar-area {
+  fill: rgba(9, 105, 218, 0.22);
+  stroke: #0969da;
+  stroke-width: 2;
+}
+
+.radar-label {
+  font-size: 11px;
+  fill: currentColor;
+}
+
+/* 柱状图 */
+.bar-grid {
+  stroke: var(--line, #eaeef2);
+  stroke-width: 1;
+}
+
+.bar-threshold {
+  stroke: #cf222e;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.bar-threshold-label,
+.bar-tick {
+  font-size: 11px;
+  fill: #cf222e;
+}
+
+.bar-tick {
+  fill: currentColor;
+  opacity: 0.7;
+}
+
+.bar-rect {
+  fill: #0969da;
+}
+
+/* 超阈值：填色 + 数值本身也是文字，不靠颜色单独表意 */
+.bar-rect.over {
+  fill: #cf222e;
+}
+
+.bar-rect.unmeasured {
+  fill: url(#none);
+  fill: rgba(140, 140, 140, 0.14);
+  stroke: #8c8c8c;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.bar-value {
+  font-size: 11px;
+  font-weight: 600;
+  fill: currentColor;
+}
+
+.bar-unmeasured {
+  font-size: 11px;
+  fill: #6e6e6e;
+}
+
+.bar-caption {
+  font-size: 11px;
+  fill: currentColor;
+}
+
+.bar-count {
+  font-size: 10px;
+  fill: currentColor;
+  opacity: 0.65;
+}
+
+/* --- 明细表 ----------------------------------------------------------------------------- */
+.poi-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.poi-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+#poi-table td.sub {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* FR-213：可排序表头。箭头 + 下划线 + aria-sort 三重提示 —— 不只靠颜色。 */
+#poi-table th[data-sort] {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+#poi-table th[data-sort]::after {
+  content: " ⇅";
+  opacity: 0.35;
+  font-weight: 400;
+}
+
+#poi-table th[data-sort].sorted {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+#poi-table th[data-sort].sorted::after {
+  content: " ↑";
+  opacity: 1;
+}
+
+#poi-table th[data-sort].sorted-desc::after {
+  content: " ↓";
+  opacity: 1;
+}
+
+#poi-table th[data-sort]:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 1px;
+}
+
+#poi-table tr.outside td {
+  opacity: 0.6;
+}
+
+#poi-table td.muted {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+/* --- 盲区清单 --------------------------------------------------------------------------- */
+.blind-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.blind-item {
+  border-left: 4px solid var(--line, #d8dee4);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: rgba(140, 140, 140, 0.05);
+}
+
+/* 两级阈值（FR-221 / FR-224）在边框与标题文字上同时体现 */
+.blind-item.blind {
+  border-left-color: #6e6e6e;
+}
+
+.blind-item.insufficient {
+  border-left-color: #d18616;
+}
+
+.blind-head {
+  margin: 0 0 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.blind-meta {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #0969da;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+/* --- 计量表 ----------------------------------------------------------------------------- */
+#analysis-usage td.metric {
+  white-space: nowrap;
+}
+
+#analysis-usage td.ok {
+  color: #1a7f37;
+}
+
+#analysis-usage td.over {
+  color: #cf222e;
+  font-weight: 700;
+}
+
+#analysis-assertions[data-ok="false"] {
+  color: #cf222e;
+  font-weight: 600;
+}
+
+/* --- 移动端（FR-106：≤768 px 单列、热区 ≥44 px）--------------------------------------- */
+@media (max-width: 768px) {
+  .score-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .score-value {
+    font-size: 34px;
+  }
+
+  .charts {
+    flex-direction: column;
+  }
+
+  .chart-box {
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* 触摸热区 ≥ 44 px：只给报告面板里的按钮，不动等时圈页的既有布局。 */
+  #report button {
+    min-height: 44px;
+    padding: 8px 14px;
+  }
+
+  .link-btn {
+    min-height: 44px;
+    padding: 10px 0;
+    text-align: left;
+  }
+}

@@ -1,0 +1,137 @@
+# CircleDoc · 一键部署（PRD FR-408 / §5「可部署」/ §6.2 零配置启动断言）
+#
+# 为什么只有一个 service（决策 D6：零外部依赖）：存储就是 SQLite + 进程内缓存，不需要
+# Redis / Postgres。每多一个容器，`docker compose up` 就多一类失败面（镜像拉不到、健康检查
+# 不过、启动顺序竞态），而 §6.2 的断言是「全新 clone、不填任何 .env、一条命令起得来、首页
+# 不出现红色报错」。这里的限流与配额由 `infra/ratelimit.py` 在进程内做，Redis 换来的收益
+# 在这个体量下并不存在，却会把「演示现场的机器装不上第二个镜像」变成风险。
+#
+# 为什么不写顶层 `version:`：Compose v2 已废弃这个字段（写了会打 obsolete 警告），v1 又要求
+# 它。删掉是唯一在两个大版本上都不报错的写法。
+#
+# 端口分工：容器内固定 8000（Dockerfile 的 CMD），宿主侧改端口只动 CIRCLEDOC_HOST_PORT。
+# 默认只绑 127.0.0.1：PRD §5 要求服务端 AK 不出网，服务本身也不该默认裸露在局域网里。
+# 手机演示要局域网访问时，在 `.env` 里写 `CIRCLEDOC_HOST_IP=0.0.0.0` 即可（compose 会自动
+# 读项目目录的 `.env` 做插值，见下面 environment 段的说明）。
+
+services:
+  circledoc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # image 让第二次 up 走本地缓存、不必重新 build；也让 CI（FR-409）能 `compose build` 后
+    # 直接按 tag 引用。标签与 api/app.py 里的 FastAPI(version=) 保持一致。
+    image: circledoc:0.1.0
+
+    # -------------------------------------------------------------------------
+    # 零配置注入：两层叠加，**两层都不依赖 .env 存在**（§6.2 的断言全靠这一点）
+    #
+    # 第 1 层 env_file 指 `.env.example` 而不是 `.env`，这是刻意的：
+    #   * 模板在全新 clone 里必然存在 → 任何 Compose 版本都不会因为「找不到 env_file」直接
+    #     报错退出。写成 `env_file: .env` 时，未创建 .env 的干净仓库会看到
+    #     `Couldn't find env file`——红线就画在这里，验收项却要求「不填任何 .env」。
+    #   * 模板内容本身就是一套可用的零配置默认值（AK 全空、DATA_MODE=auto），等于把
+    #     `infra/config.py` 的保守默认值原样搬进容器。
+    #   * `.dockerignore` 排除的是**镜像里**的 .env / .env.example；compose 读的是宿主机
+    #     项目目录里的文件，两件事互不影响。
+    # 第 2 层 environment 用 ${VAR:-默认} 从项目目录的 `.env`（或 shell 环境变量）取值。
+    #   compose 的插值永远容忍 `.env` 缺失，`:-` 默认值还会顺带压掉
+    #   「WARNING: The XXX variable is not set. Defaulting to a blank string.」这行红字。
+    #   env_file 与 environment 同名时，**environment 胜出**（Compose 规范）。
+    # ⚠️ 这里列出的是「演示与验收会现场改的旋钮」，其余键由 `.env.example` 整份带入。
+    #    为什么不全靠 env_file 带 `.env`：Compose 规范里的可选写法
+    #      env_file:
+    #        - path: .env
+    #          required: false
+    #    需要 Compose ≥ v2.24（2024-01）。本机没有 Docker，无法实测评审机的版本，而旧版本
+    #    遇到这种写法是**硬失败**而不是忽略——那恰好会让零配置启动翻车。所以走上面两层
+    #    这种在 v1/v2 都成立的等价方案。新增 `infra/config.py` 配置项时，若需要现场改，
+    #    请同步这里（并在 `.env.example` 里保留默认值）。
+    # -------------------------------------------------------------------------
+    env_file:
+      - .env.example
+
+    environment:
+      # 容器内必须监听全部网卡。`.env.example` 里 APP_HOST=127.0.0.1 是给本机 uvicorn 用的，
+      # 在容器里监听回环会让宿主端口映射直接 connection refused（「镜像起得来但打不开」的根因）。
+      APP_HOST: 0.0.0.0
+      APP_ENV: ${APP_ENV:-prod}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-true}
+
+      # 取数模式：auto 交给 /api/health 的启动探测解析，探测不到就落 mock（§4.6）。
+      # 刻意不写死 live：默认值不能假设 AK 可用。
+      DATA_MODE: ${DATA_MODE:-auto}
+      BAIDU_SERVER_AK: ${BAIDU_SERVER_AK:-}
+      BAIDU_BROWSER_AK: ${BAIDU_BROWSER_AK:-}
+
+      # 出网预算与并发：`BAIDU_MAX_CONCURRENCY` 刻意低于官方并发口径，因为超限的表现是
+      # body 里的 status=401 而不是 HTTP 429（笔记 §3.2）。
+      BAIDU_ALLOWED_HOSTS: ${BAIDU_ALLOWED_HOSTS:-api.map.baidu.com}
+      BAIDU_MAX_CONCURRENCY: ${BAIDU_MAX_CONCURRENCY:-4}
+      BAIDU_CONNECT_TIMEOUT_S: ${BAIDU_CONNECT_TIMEOUT_S:-5.0}
+      BAIDU_READ_TIMEOUT_S: ${BAIDU_READ_TIMEOUT_S:-12.0}
+
+      # 令牌桶：§6.2「限流验证在本地 mock 网络层完成」要把阈值当场调小，所以这几个必须能从
+      # `.env` 直接透传，而不是只存在于模板里。
+      RATE_PLACE_QPS: ${RATE_PLACE_QPS:-0.5}
+      BURST_PLACE: ${BURST_PLACE:-1}
+      RATE_REGEO_QPS: ${RATE_REGEO_QPS:-0.5}
+      BURST_REGEO: ${BURST_REGEO:-1}
+      RATE_ROUTE_QPS: ${RATE_ROUTE_QPS:-2.5}
+      BURST_ROUTE: ${BURST_ROUTE:-2}
+      RATE_GEOCODE_QPS: ${RATE_GEOCODE_QPS:-1.0}
+      BURST_GEOCODE: ${BURST_GEOCODE:-2}
+
+      # 单次分析三栏预算：§6.2 的「调成 1 条会中途截停、调成 5000 永不触发」两个方向都要
+      # 只改 `.env` 就能验证，所以这里是插值而不是写死。
+      MAX_PLACE_CALLS_PER_ANALYSIS: ${MAX_PLACE_CALLS_PER_ANALYSIS:-8}
+      MAX_ROUTE_LINES_PER_ANALYSIS: ${MAX_ROUTE_LINES_PER_ANALYSIS:-150}
+      MAX_QUOTA_UNITS_PER_ANALYSIS: ${MAX_QUOTA_UNITS_PER_ANALYSIS:-120}
+      MAX_QUOTA_UNITS_DUAL_MODE: ${MAX_QUOTA_UNITS_DUAL_MODE:-220}
+      MAX_HTTP_REQUESTS_PER_ANALYSIS: ${MAX_HTTP_REQUESTS_PER_ANALYSIS:-20}
+
+      # 缓存路径写绝对路径：`.env.example` 里的 `data/cache.db` 是相对 cwd 的，容器里 cwd
+      # 一变（自定义 entrypoint、`docker exec` 进去另起进程）就会在别处悄悄建第二个库，
+      # 于是「命中率 0」这种问题根本查不到。绝对路径把它钉死在 bind mount 上。
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_DB_PATH: ${CACHE_DB_PATH:-/app/data/cache.db}
+      CACHE_TTL_PLACE_S: ${CACHE_TTL_PLACE_S:-86400}
+      SAMPLES_DIR: ${SAMPLES_DIR:-/app/data/samples}
+      WEB_DIR: ${WEB_DIR:-/app/web}
+      # 这两份配置随镜像分发（Dockerfile 有 `COPY config/ ./config/`），容器里 ROOT_DIR=/app，
+      # 所以默认值在容器内天然正确。列在这里只为「现场要临时换一套权重/样例」时不必重建镜像。
+      SAMPLES_CONFIG_PATH: ${SAMPLES_CONFIG_PATH:-/app/config/samples.yaml}
+      WEIGHTS_PATH: ${WEIGHTS_PATH:-/app/config/weights.yaml}
+
+      # 宿主侧的 CIRCLEDOC_HOST_IP / CIRCLEDOC_HOST_PORT 只用于下面 ports 的插值，
+      # **不进容器环境**：它们是编排层的概念，容器内固定听 8000（Dockerfile 的 CMD）。
+      # APP_PORT 也因此刻意不透传——否则会出现「.env 写了 8080、容器还在听 8000」的错位。
+
+    # build + 镜像都存在时 `up` 不会重新 build；镜像缺失时 Compose v2 会自动 build 一次，
+    # 所以「clone 完直接 up」这条路径不需要额外命令（run.sh / run.ps1 里再显式 --build）。
+    ports:
+      - ${CIRCLEDOC_HOST_IP:-127.0.0.1}:${CIRCLEDOC_HOST_PORT:-8000}:8000
+
+    volumes:
+      # SQLite 落在 bind mount 上：重启容器还在（演示第二次命中），删掉文件即回到冷启动。
+      # 🔴 挂载目录里出现 cache.db 是**运行期产物**，与 FR-402 的「镜像不得预置 .db」不冲突：
+      # 前者是用户本机跑出来的，后者是分发内容，.dockerignore 只管后者。
+      # ⚠️ Linux 宿主上 uid 1000 之外的用户会看到 attempt to write a readonly database，
+      #    需要 `sudo chown -R 1000:1000 data`；Docker Desktop（Win/mac）自动处理。
+      - ./data:/app/data
+
+    restart: unless-stopped
+
+    # 日志上限：json-file 默认不轮转，演示跑一整天能把磁盘吃掉几个 G。
+    # 为什么留 JSON 驱动而不是 local：LOG_JSON=true 的日志本来是单行 JSON，local 驱动会
+    # 再包一层，`docker compose logs` 里就不是合法的 JSON 行了。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # 健康检查定义在 Dockerfile 的 HEALTHCHECK 里（唯一出处）：同一条探测命令写两处必然
+    # 会漂移，而 compose 会直接继承镜像里的 HEALTHCHECK，`docker inspect` / compose ps
+    # 都能看到健康状态。

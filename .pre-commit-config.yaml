@@ -1,0 +1,62 @@
+# CircleDoc pre-commit 配置（PRD §6.4：「ruff + black 零告警，pre-commit 配置存在」）。
+#
+# 为什么 pre-commit 与 CI 跑的是**同一组命令**：两边规则分叉时，最典型的失败是
+# 「本地全绿、CI 红」，然后有人去 CI 里放宽规则而不是改代码。所以这里只做两件事
+# —— ruff、black —— 且与 `.github/workflows/ci.yml` 的 lint job 逐字一致。
+#
+# 为什么 hook 的 `rev` 钉在具体版本而不是 `main`：pre-commit 会把 hook 装进独立环境，
+# 跟着 `main` 走意味着**今天能过、明天可能换个规则就红**，而且红的时候代码一行没改。
+# 版本区间与 `requirements.txt` 的 ruff/black 保持一致（同一批规则集）。
+
+repos:
+  # --- ruff：lint（含 isort / pyupgrade / bugbear 等规则集，见 pyproject.toml）---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff
+        name: ruff（lint，自动修可安全修复项）
+        args: [--fix, --exit-non-zero-on-fix]
+        types_or: [python, pyi]
+
+  # --- black：格式化。排在 ruff 之后，两者都改格式时以 black 为准 ---
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 26.5.1
+    hooks:
+      - id: black
+        name: black（格式化，line-length 100）
+        language_version: python3.11
+
+  # --- 通用卫生：这些是「不该进仓库」的东西，与 FR-410 的密钥/垃圾文件要求同源 ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        # 演示录屏（docs/demo.mp4）是交付物之一，但超过 5 MB 就该走外链而不是塞进 git。
+        args: [--maxkb=5120]
+      - id: check-merge-conflict
+      - id: check-yaml
+        # `.github/workflows/*.yml` 里有 `on:` 这类被 YAML 1.1 当成布尔值的键，
+        # check-yaml 的默认解析器会误报；排除掉，工作流语法交给 GitHub 自己校验。
+        exclude: ^\.github/
+      - id: check-json
+      - id: end-of-file-fixer
+        # 样例基线由 `tools/gen_samples.py` 生成、末尾带换行，不要让它被改。
+        exclude: ^data/samples/
+      - id: trailing-whitespace
+        exclude: ^(data/samples/|docs/BAIDU_API_NOTES\.md)
+      - id: mixed-line-ending
+        # run.sh 必须是 LF（CRLF 会让 bash 找不到命令，见 tools/README-deploy.md 第 4 节）；
+        # run.ps1 必须是 CRLF + BOM（PowerShell 5.1 不认无 BOM 的 UTF-8）。
+        args: [--fix=no]
+        exclude: ^(run\.sh|run\.ps1)$
+
+  # --- 密钥扫描：FR-410「仓库无明文 AK」。这是最后一道闸，不替代 CI 里的扫描 ---
+  - repo: local
+    hooks:
+      - id: forbid-baidu-ak
+        name: 禁止提交明文百度 AK（FR-410）
+        language: pygrep
+        # 百度 AK 是 24 位以上字母数字串。只在「赋值形态」上匹配，避免误伤文档里的示例文字。
+        entry: '(?i)baidu_(server|browser)_ak\s*[:=]\s*["'']?[A-Za-z0-9]{24,}'
+        types: [text]
+        exclude: ^(\.env\.example|docs/|README\.md|tests/)
