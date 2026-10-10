@@ -2,10 +2,10 @@
  * 一次性验收脚本：在最小 DOM 打桩下真跑 `web/report.js` 的渲染路径。
  *
  * 目的：`node --check` 只验语法，抓不到「函数名拼错 / 属性不存在」这类**运行时**引用错误；
- * 而报告面板有 24 个 DOM 节点与两套手绘 SVG，一旦某处炸了就是整块空白、且控制台只在
+ * 而报告面板有 25 个 DOM 节点与两套手绘 SVG，一旦某处炸了就是整块空白、且控制台只在
  * appendChild 那一刻才报。这里用真实 `/api/analysis` 响应喂进去，把渲染路径整个走一遍。
  *
- * 用法：node tools/_report_dom_smoke.mjs <report.json>
+ * 用法：node tools/report_dom_smoke.mjs [report.json]（不传则用内置样本）
  * 用完即删（不是交付物，也不进 CI —— CI 里没有 node）。
  */
 
@@ -375,7 +375,7 @@ function makeElement(tag, ns) {
   return element;
 }
 
-// report.js 的 cache() 会取 24 个 id：全部预建，这样任何 id 拼错都会在 el.x 上暴露为 null。
+// report.js 的 cache() 会取 25 个 id：全部预建，这样任何 id 拼错都会在 el.x 上暴露为 null。
 const REQUIRED_IDS = [
   "report",
   "report-empty",

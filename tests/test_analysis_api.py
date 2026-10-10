@@ -455,8 +455,13 @@ class _StubPoiService:
 
 
 @async_test
-async def test_live_report_warns_that_blind_spots_are_biased_up() -> None:
-    """POI 层是 live 时，`notes` 必须明说盲区偏大——读报告的人不该先去翻 README。"""
+@pytest.mark.parametrize("poi_source", ["live", "cache"])
+async def test_real_retrieval_warns_that_blind_spots_are_biased_up(poi_source: str) -> None:
+    """POI 层是真实检索时，`notes` 必须明说盲区偏大——读报告的人不该先去翻 README。
+
+    `cache` 与 `live` 一起断言：浏览器实跑（2026-10-10）发现同一社区第二次跑时 POI 层报
+    `cache`，如果只认 `live`，这条提示会在缓存命中后悄悄消失，而同一条数据缺陷还在。
+    """
     from services.analysis import run_analysis
 
     report = await run_analysis(
@@ -464,7 +469,7 @@ async def test_live_report_warns_that_blind_spots_are_biased_up() -> None:
         modes=["walking"],
         minutes=15.0,
         data_mode="mock",
-        poi_service=_StubPoiService("live"),
+        poi_service=_StubPoiService(poi_source),
     )
     joined = " ".join(report["notes"])
     assert "market" in joined, report["notes"]

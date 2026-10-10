@@ -991,8 +991,8 @@ PRD §4.5 要的是**可替换**，不是可阅读。」
 **这个代价的实际落点与兜底**：R11 那条「改了 HTML 忘了改 JS」的缺陷形态在本项目里**真实存在**——
 `el.x` 会是 `null`，报告某一块永远空白，而**控制台一条错误都不会有**。兜底是
 `test_web_smoke.py::test_report_js_ids_all_exist_in_the_page`：把 `web/report.js` 里
-`getElementById("…")` 的 **24 个 id** 全部抠出来，逐个断言 `isochrone.html` 里存在。
-另有一条 `tools/report_dom_smoke.mjs`（Node + 最小 DOM 打桩，12 项断言）真跑渲染路径。
+`getElementById("…")` 的 **25 个 id** 全部抠出来，逐个断言 `isochrone.html` 里存在。
+另有一条 `tools/report_dom_smoke.mjs`（Node + 最小 DOM 打桩，15 项断言）真跑渲染路径。
 
 **顺带的后果**：`§5` 的「总资源 ≤ 500 KB」预算被**大幅超额达成**（第三方依赖 0 字节），
 但 `§5` 字面要求的「Vue 与 ECharts 本地 vendored」这一条**没有满足**。README 需按此如实说明。
@@ -1109,11 +1109,13 @@ mock 掉网络层，连发 20 个请求：
 | --- | --- | --- |
 | ~~**`live` 模式端到端**~~ | ✅ **2026-10-10 已补验**（`docs/TEST_REPORT.md` §4.3） | §11 的推算模型已被一次真实实跑落在 PRD 目标内（14.6 ~ 16.1 s ≤ 25 s）；但 §2 `blocked` 判据与 §3 限流**仍只在 `MockTransport` 上验**——条款 3.2.3(ii) 禁压测，这一点不因「有了 AK」而改变 |
 | **`docker compose up`** | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → 三个接口可服务）；**compose 的起停与 bind mount 写权限仍未验** |
-| **真实测时 vs 插值推算的偏差统计** | live 每样只跑过一次，**样本量 1**，凑不出偏差分布 | §2.5 的精度取舍仍只能给机制说明。待补：对同一样例各跑多次 `live` 与 `mock`，比较 `area_km2` 与各维度 `count_in` |
+| **真实测时 vs 插值推算的偏差统计** | live 每样只跑过一次，**样本量 1**，凑不出偏差分布 | §2.5 的精度取舍仍只能给机制说明。2026-10-10 补到**两条逐顶点真实对照**（`measured` 差 +6.7 %、`interpolated` 差 +32 %，见 `docs/TEST_REPORT.md` §5 第 4 条）：**两个样本不是分布**，且它顺带证明 `RouteMatrix` 与 `Direction` 对同一 O-D 本身就差 ≈7 % |
+| ~~**JSAPI 4.0 实底图上的顶点点击**~~ | ✅ **2026-10-10 已补验**（真实浏览器 + 真实 AK + 真实指针事件） | §4 的「SVG 舞台 / JSAPI 实底图双渲染」两条路径**现在都真跑过**：实时底图侧 23 个 `BMap_Marker`、点顶点出网 1 次即画出真实路网轨迹（48/45 折点），话术随取数层从「合成示意线」变「真实路网轨迹」。仍未验的是**12 次硬上限与连点竞态在实时底图路径上**（同一份 `loadPolyline()`，SVG 侧已实测；再跑要烧 10 次真实 `direction`）。逐条证据见 `docs/shots/README-isochrone-acceptance.md` |
+| 🔴 **新发现，未修**：live 等时圈的响应体 `usage` 少记一个批次 | 同一次 `POST /api/isochrone`：`body.usage` 报 `quota_units=40 / http_requests=6`，同 `request_id` 的服务端日志是 `44 / 7` | §9 的三栏计量口径在**这条路径上偏乐观**（真实花费 ≥ 报告值）。§2 的 `ProbeTally` 与客户端累加器为何差一个批次**尚未定位**；mock 层两账本同源，所以零出网冒烟抓不到 |
 | **移动端真机行为**（R15） | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
 | ~~**样例社区坐标的真实性**~~ | ✅ **2026-10-10 已补验**（`gen_samples.py --verify` 走 `/api/suggest` + 逆地理交叉核对行政区） | 三份清单标 `coord_verified: true`，含义是「**工具核验过且行政区对得上**」，不是人工实地踏勘；`/api/samples` 原样透出该标记。🔴 教训：**geocode 只能给到城市级坐标**，「非空就算核验」会把三个错坐标一起标成已核验（`docs/TEST_REPORT.md` §2.8） |
-| **`live` 模式下 `market` 的召回** | 检索词 `市场$超市$便利店` 被「市场监督管理局」（`政府机构;行政单位`）等同名机构挤占，`tag` 过滤实测反而把结果清空 | FR-221 的盲区主判定依赖 `market` ∩ `pharmacy` ∩ `primary_school`，`market` 恒为 0 → **`live` 盲区面积系统性偏大**（交道口 62.29 %、肖家河 86.89 %）。本轮口径是**接受并明示**：后端对 `data_source = live` 的报告在 `notes` 里挂提示，`mock` 口径不受影响。试验数据与三条约束见 `docs/TEST_REPORT.md` §4.4 |
-| **浏览器内真实渲染** | 本环境的无头 Chrome 无输出 | §10.2 / §10.3 的图表与 DOM 结论来自 `tools/report_dom_smoke.mjs`（Node + 最小 DOM 打桩，12 项断言通过），它**不是**真实浏览器 |
+| **`live` 模式下 `market` 的召回** | 检索词 `市场$超市$便利店` 被「市场监督管理局」（`政府机构;行政单位`）等同名机构挤占，`tag` 过滤实测反而把结果清空 | FR-221 的盲区主判定依赖 `market` ∩ `pharmacy` ∩ `primary_school`，`market` 恒为 0 → **`live` 盲区面积系统性偏大**（交道口 62.29 %、肖家河 86.89 %）。本轮口径是**接受并明示**：后端对**真实检索那一侧**（`data_source = live` **与 `cache`**）的报告在 `notes` 里挂提示，`mock` 口径不受影响。`cache` 必须一起算——缓存里存的就是同一份真实返回（`docs/TEST_REPORT.md` §2.9）。试验数据与三条约束见 `docs/TEST_REPORT.md` §4.4 |
+| **浏览器内真实渲染** | 本环境的无头 Chrome 无输出 | §10.2 / §10.3 的图表与 DOM 结论来自 Node + 最小 DOM 打桩真跑的两条渲染路径（`tools/report_dom_smoke.mjs` 15 项 + `tools/map_layers_smoke.mjs` 12 项断言，`grep -c 'OK '` 实测），它**不是**真实浏览器 |
 | **PNG 报告导出** | 功能未实现 | §6.4：条款 6.6 的「截图必须保留版权与审图号」目前无对应风险面，但补该功能时必须一并实现该约束 |
 | **官方未公开的数值** | 需登录控制台核实 | `localhost` 能否作为 Referer 白名单、地点检索 `page_size` 真实上限是 10 还是 20、逆地理 `pois` 返回条数上限、JSAPI 4.0 下热力图插件可用性——`§7.4` 已按保守值设计（10 且不翻页） |
 

@@ -5,7 +5,7 @@
 | 文档定位 | PRD §9 交付物「对比测试报告」；对应 FR-405、FR-406、§6.1、§6.2 |
 | 最后更新 | 2026-10-10 |
 | 测试命令 | `pytest -q`（零配置、零 AK、零真实出网） |
-| 结论 | **438 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
+| 结论 | **439 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
 
 ---
 
@@ -14,10 +14,11 @@
 **2026-10-10 起本项目已接入真实百度 AK**（服务端 + 浏览器端两类，配在 gitignored 的 `.env` 里）。
 所以这份报告现在有两类证据，**口径不同、不互相顶替**：
 
-* **`mock` 侧**：436 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
+* **`mock` 侧**：439 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
   也是本文 §1、§2、§3、§5 的主口径。
-* **`live` 侧**：§4.3 是一次**真实出网**的端到端实跑（三样例各一次）。§2.6 ~ §2.8 三个缺陷
-  **只有在 live 下才暴露**——离线演示阶段它们全被「合成报文比真实报文更完整」盖住了。
+* **`live` 侧**：§4.3 是一次**真实出网**的端到端实跑（三样例各一次），§6 的「JSAPI 实底图顶点点击」
+  是另一次真实浏览器 + 真实出网的补验。§2.6 ~ §2.9 四个缺陷**只有在 live 下才暴露**——
+  离线演示阶段它们全被「合成报文比真实报文更完整」盖住了。
 
 两条纪律没有因为「有了 AK」而放松：
 
@@ -40,20 +41,23 @@
 | `test_blind_spots.py` | 32 | 网格生成、haversine 判定、flood fill、轮廓追踪、两级阈值 | FR-220 ~ FR-224 |
 | `test_score.py` | 31 | 加权、95 % 权重缺口裁决、等级线、盲区惩罚、摘要生成 | FR-301、FR-302、FR-304 |
 | `test_isochrone_api.py` | 26 | `/api/isochrone` 全形状、降级、polyline 12 次硬上限 | FR-201、FR-203、FR-403 |
-| `test_analysis_api.py` | 37 | `/api/analysis` 报告形状、任务轮询、后台模式、`/api/poi` 七维度、错误信封、**live 盲区偏大提示** | §4.7、FR-205、FR-404、§4.4 |
+| `test_analysis_api.py` | 38 | `/api/analysis` 报告形状、任务轮询、后台模式、`/api/poi` 七维度、错误信封、**真实检索盲区偏大提示（`live` 与 `cache` 两态各断言一次 + `sample` 反向断言）** | §4.7、FR-205、FR-404、§4.4、§2.9 |
 | `test_web_smoke.py` | 27 | 静态页可服务、零公网外链、**DOM 契约对账**、FR-212/222/213 的前端接线 | R11、R12、R13、FR-213 |
 | `test_samples_baseline.py` | 16 | 三样例一致性、三型差异方向、基线不漂 | FR-102、FR-412、§6.1 |
 | `test_coord_param_table.py` | 13 | 接口 × 坐标参数名 × 坐标顺序常量表 | FR-406、R8 |
 | `test_health_contract.py` | 10 | `/api/health` 三个「数据模式」字段的位置与值域、零配置横幅、AK 不外泄 | §4.6、FR-404、FR-410 |
 | `test_cache_store_singleton.py` | 4 | 缓存单例口径唯一 | FR-402 |
-| **合计** | **438** | | |
+| **合计** | **439** | | |
 
-耗时：**4.8 s**（最慢单例 0.68 s：`test_task_registry_is_bounded`）。无网络、无外部数据库、无 Redis。
+耗时：**4.8 ~ 11.6 s**（同一轮 439 例，本机两次实测 4.76 / 4.84 s，另两次 8.94 / 11.55 s）。
+这个区间**不是代码回归**，是后台负载：慢的那两次 `chrome-devtools` 浏览器与它的 node MCP 服务都在线，
+纯 CPU 基准 `sum(range(10**7))` 同时段实测 0.644 s（正常量级的两倍），最慢单例
+`test_task_registry_is_bounded` 也从 0.68 s 涨到 1.9 ~ 2.3 s。无网络、无外部数据库、无 Redis。
 
 ### 1.1 三条值得单独说的断言
 
 **`test_web_smoke.py::test_report_js_ids_all_exist_in_the_page`** —— 把 `web/report.js` 里
-`getElementById("…")` 的 24 个 id 全部抠出来，逐个断言 `isochrone.html` 里存在。
+`getElementById("…")` 的 25 个 id 全部抠出来，逐个断言 `isochrone.html` 里存在。
 抓的是「改了 HTML 忘了改 JS」：漏一个 id，`el.x` 就是 `null`，报告某一块永远空白，
 而**控制台一条错误都不会有**。这是 R11「无构建模式没有类型检查兜底」那条风险的实际落点。
 
@@ -67,12 +71,12 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 
 ---
 
-## 2. 开发过程中发现并修复的八个真实缺陷
+## 2. 开发过程中发现并修复的九个真实缺陷
 
-八份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
+九份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
 「把 CI 脚本真的执行一遍」「在最小 DOM 打桩下真跑一遍绘制路径」
 「**配上真实 AK 跑一遍 live 全链路**」之后暴露的。
-其中 §2.6 ~ §2.8 三个**只在接入真实 AK 之后才可能出现** —— 在离线演示阶段，
+其中 §2.6 ~ §2.9 四个**只在接入真实 AK 之后才可能出现** —— 在离线演示阶段，
 它们全都被「合成数据比真实数据更完整」这件事盖住了。
 
 ### 2.1 `services/poi_search.py`：7 处协程未 `await`（会导致接口 500）
@@ -285,6 +289,36 @@ scope=2   → 多出 detail_info = tag「医疗;综合医院」/ classified_poi_
 
 回归覆盖：`tests/` 无（这是运维工具，不在 pytest 范围），但 `--verify` 的拒绝路径
 已在上表用真实数据验证过。
+
+### 2.9 🔴 `market` 提示只认 `live`，同一份数据第二次跑就悄悄改口
+
+**现象**（2026-10-10 真实浏览器复验 JSAPI 底图时顺带抓到）：交道口连点两次「一键体检」。
+
+| 第几次 | 徽标 | `place_calls / quota_units / http_requests` | `notes` 里有没有「盲区面积系统性偏大」 |
+| --- | --- | --- | --- |
+| 1 | 实时调用 | 7 / 12 / 8 | **有** ✅ |
+| 2 | 本地缓存 | 0 / 0 / 0 | **没有** ❌ |
+| 3（修复后） | 本地缓存 | 0 / 0 / 0 | **有** ✅（新文案） |
+
+两次跑的是**同一份 POI 报文**（第二次只是从 SQLite 里读回来），分数都是 54.0 D、盲区都是 3 块，
+但提示在第二次消失了。
+
+**根因**：判定条件写成 `poi_result["data_source"] == "live"`。而 POI 层的取数层出口有三态
+（`services/poi_search.py:_overall_source`：任一组 `live` → `live`，否则任一组 `cache` → `cache`，否则 `sample`），
+**`cache` 装的就是上一次真实检索的原样返回**，`market` 恒为 0 这条缺陷一分不减。
+只认 `live` 等于宣布「缓存里的真实数据没有这个问题」，那是假的。
+
+**修复**：条件改为 `in ("live", "cache")`，并把提示首句从「本次为实时检索」改成
+「本次 POI 层来自真实检索（或其本地缓存复用）」——文案也得能覆盖 `cache`，否则读者会以为在说别的东西。
+`sample` 仍然**不挂**：合成层的 `market` 是按画像生成的、本来有值，挂上就是制造一个不存在的问题。
+
+**回归覆盖**：`tests/test_analysis_api.py::test_real_retrieval_warns_that_blind_spots_are_biased_up`
+按 `[live, cache]` 两个参数各断言一次（用只换 `data_source` 的 POI 桩服务，零出网），
+`test_sample_layer_does_not_claim_a_problem_it_does_not_have` 反向断言 `sample` 不挂。
+
+**这条为什么值得单独记**：它是**第四个**「只有接了真实 AK 才看得见」的缺陷（前三条见 §2.6 ~ §2.8），
+而且和前两条不同——它不在数据层，在**我自己为了「诚实披露缺陷」而写的那段代码里**。
+用 mock 报文跑的单测永远只会喂 `live` 或 `sample`，`cache` 这一态要有一份真实缓存才会出现。
 
 ---
 
@@ -550,9 +584,22 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
    实测值；`services/coverage.py` 明确拒绝用直线距离换算的时间顶替实测时间
    （见其模块 docstring 第 3 条与 `tests/test_coverage.py::test_timeliness_score_is_zero_when_nothing_was_measured`）。
    所以「插值误差会不会污染分数」这个问题在本项目里是**结构上不成立**的。
-4. **待补**：拿到 AK 后，对同一样例各跑一次 `live` 与 `mock`，比较两种模式下
-   `area_km2` 与各维度 `count_in` 的差异——那才是「实测 vs 插值」的真实偏差。
-   当前环境下无法进行。
+4. **2026-10-10 补到的两条真实对照**（JSAPI 底图那一轮顺带取得，见
+   `docs/shots/README-isochrone-acceptance.md`「JSAPI 实时底图复验记录」第 3 节）：
+   对同一中心点已算出的顶点，用顶点懒加载补调一次 `direction/v2/walking`，与等时圈顶点的记账对比——
+
+   | 顶点 | 顶点上的账 | `direction` 实测 | 差 |
+   | --- | --- | --- | --- |
+   | #6（`measured`，方位角 90°） | 984 m / 15.0 min | 1050 m / 15.4 min | 距离 **+6.7 %** |
+   | #2（`interpolated`，方位角 15°） | 719 m / 15.0 min | 950 m / 13.6 min | 距离 **+32 %** |
+
+   两个结论：① **`RouteMatrix` 与 `Direction` 这两个接口对同一 O-D 给的数就不一致**（≈7 %），
+   所以「实测」本身带一层接口口径差，不是绝对真值；② `interpolated` 顶点继承的是相邻实测方向的距离，
+   偏 32 % 是**机制的必然**而不是意外——这也正是评分只吃 `measured`、不吃插值的原因（第 3 条）。
+   ⚠️ **样本量 2，给不出分布**，别把它读成「插值误差 ≈30 %」。
+5. **仍待补**：对同一样例各跑一次 `live` 与 `mock`、比较 `area_km2` 与各维度 `count_in` 的差异。
+   单次已能做（§4.3 就是 live 实跑），但**多次 live 的 place 配额撑不起**（100 次/日，一次体检 7~8 次），
+   所以这条仍然只能停在「样本量 1」。
 
 ---
 
@@ -564,12 +611,13 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 | --- | --- | --- |
 | ~~live 模式端到端~~ | ✅ **2026-10-10 已补验**，见 §4.3 | 三个样例全部 `data_source=live`、§6.1 预算在内、14.6~16.1 s |
 | ~~样例社区坐标的真实性~~ | ✅ **2026-10-10 已补验**，见 §4.3 第 1 步 | 三条坐标走 `/api/suggest` 取得并交叉核对行政区，`coord_verified: true` |
-| JSAPI 4.0 **实底图**渲染 | 需要浏览器真实加载 `api.map.baidu.com` 的 JSAPI | FR-212/FR-222 的 JSAPI 分支**只有代码审读**，未在浏览器里跑过；SVG 舞台分支已在 `tools/map_layers_smoke.mjs` 下真跑（12 项断言） |
-| live 模式下 FR-221 盲区结论的**准确性** | `market` 系统性为 0，见 §4.4 | 盲区面积在 live 模式下**系统性偏大**，不能当成真实结论呈现；根因已定位在检索层，无 PRD 框架内的干净修法。**2026-10-10 定口径：接受并明示**（见 §4.4 末的决策段）——`data_source=live` 的报告由后端 `notes` 自动带这条提示，`mock` 口径不受影响 |
+| ~~JSAPI 4.0 **实底图**渲染~~ | ✅ **2026-10-10 已补验**：真实浏览器加载 JSAPI 4.0、23 个 `BMap_Marker`、在顶点上派发真实指针事件 → `POST /api/isochrone/polyline` 200 并画出真实路网轨迹（48/45 折点）。证据在 `docs/shots/README-isochrone-acceptance.md` | 这一轮**抓出了 §2.9**（提示只认 `live`）。仍未验的两项：12 次硬上限与连点竞态**在实时底图路径上**（同一份 `loadPolyline()`，SVG 路径已实测；再跑要烧 10 次真实 `direction`，按配额纪律不跑） |
+| 🔴 **新发现，未修**：live 等时圈的响应体 `usage` 比服务端请求级计量少记 | 同一次 `POST /api/isochrone`：`body.usage` 是 `quota_units=40 / http_requests=6`，同 `request_id` 的服务端日志是 `44 / 7`，差一个批次 | 方向是**少报**（真实花费 ≥ 报告值），所以 §6.1 的预算断言在 live 等时圈这条路径上偏乐观。mock 层两账本同源、冒烟自测抓不到。**尚未定位**是哪一批没并进 `ProbeTally`，登记为待修而不是文档口径 |
+| live 模式下 FR-221 盲区结论的**准确性** | `market` 系统性为 0，见 §4.4 | 盲区面积在 live 模式下**系统性偏大**，不能当成真实结论呈现；根因已定位在检索层，无 PRD 框架内的干净修法。**2026-10-10 定口径：接受并明示**（见 §4.4 末的决策段）——真实检索那一侧（`data_source = live` **与 `cache`**）的报告由后端 `notes` 自动带这条提示，`mock` 口径不受影响；`cache` 一起算的原因见 §2.9 |
 | `docker compose up` | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → `/api/health` + `/api/samples` + `POST /api/analysis` 可服务）。**仍未验**：compose 的起停、以及 CI 没挂 `-v` 所以「Linux 宿主 UID 1000 对 `./data` 的写权限」这条在开发机上复现不出来 |
 | 移动端**真机**行为 | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
-| 浏览器内真实渲染 | 本环境的无头 Chrome 无输出（被沙箱挡住） | 改用 Node + 最小 DOM 打桩真跑 `web/report.js` 与 `web/isochrone.js` 的**绘制路径**（`tools/report_dom_smoke.mjs` 17 项 + `tools/map_layers_smoke.mjs` 12 项，全部通过），但它**不是**真实浏览器 |
-| 前端截图 | 本项目历史上浏览器无法落地截图 | 以 DOM 计数、计算样式、network / console 文字证据替代 |
+| 浏览器内真实渲染 | 本环境的无头 Chrome 无输出（被沙箱挡住） | 改用 Node + 最小 DOM 打桩真跑 `web/report.js` 与 `web/isochrone.js` 的**绘制路径**（`tools/report_dom_smoke.mjs` **15 项** + `tools/map_layers_smoke.mjs` **12 项**，`grep -c 'OK '` 实测；此前本文写 17、README/DESIGN 写 12，三处都对不上脚本真实输出，已统一），但它**不是**真实浏览器 |
+| 前端截图（**能拍、但不入库**） | 2026-10-10 起 chrome-devtools 通道能截图（实时底图与橙色真实路网线已现场目视确认） | **仍不提供 PNG**：截图必然含百度瓦片与版权条，把第三方地图影像固化进开源仓库是另一回事；本文件继续以 DOM 计数、network、状态行/tooltip 原文作证据 |
 
 ---
 
@@ -603,3 +651,28 @@ ruff check . && black --check .
 ```
 
 第 4、5、5b 三条都不依赖 AK，也不访问任何外部服务。
+
+两套冒烟自测（`m1_smoke` / `m2_smoke`，脚本在仓库外的 `swarm/` 下）**自己压掉 AK**：
+脚本在 `chdir` 前就把 `BAIDU_SERVER_AK` / `BAIDU_BROWSER_AK` 两个环境变量置空。原因是
+pydantic-settings 的环境变量优先级高于 `.env`，本机一旦配了真实 AK，不显式压掉脚本会**真的**
+打百度线上服务；而冒烟的出网守卫只装在父进程，`[E]` 段起的 uvicorn 子进程没有守卫，全靠这一手。
+CI 本来就没有 `.env`，这条改动对它无感；2026-10-10 复跑 `m1` 35/35、`m2` 102/102，守卫均未触发。
+
+### 7.1 文档里那几个「自测数字」也要用命令复核（本轮抓到三处漂移）
+
+本文与 README / DESIGN 引用的**断言条数**都是手写的，而这三处早就和脚本真实输出对不上了。
+复现命令与本轮实测值：
+
+| 数字 | 复核命令 | 实测 | 此前文档写的 |
+| --- | --- | --- | --- |
+| `report.js` 取的 DOM 节点数 | `grep -o 'getElementById("[^"]*"' web/report.js \| sed 's/.*("\(.*\)"/\1/' \| sort -u \| wc -l` | **25** | 24（README §10.4 / 本文 §1.1 / DESIGN §10 / 两个脚本的注释都写的 24） |
+| `report_dom_smoke.mjs` 断言条数 | `node tools/report_dom_smoke.mjs \| grep -c 'OK '` | **15** | 本文写 17、README/DESIGN 写 12 |
+| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12** | 12（对） |
+| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **27** | README §10.4 写 18 例（本文 §1 表的 27 是对的） |
+
+顺带修掉 `tools/report_dom_smoke.mjs` 头注释里那条**照抄会失败**的用法：它写的是
+`node tools/_report_dom_smoke.mjs <report.json>`（文件名多个下划线前缀、且参数其实可省），
+实际路径是 `tools/report_dom_smoke.mjs`，不传参数走内置样本。
+
+🔴 教训与 §2.7 同源：**能算出来的数字就别手写**。DOM 契约那条断言本身是动态取 id 的，
+所以「24」写错了它照样全绿——数字只存在于散文里，没有任何测试守着它。

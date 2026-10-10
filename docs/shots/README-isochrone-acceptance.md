@@ -125,7 +125,85 @@
 4. **连点不串台（补强项 5 里缺的 polyline 侧竞态）**
    - 用包装 `fetch` 放大第一次请求的返回时延（700 ms），先后点击顶点 #6、#10：network 两条 polyline 请求都发出（各 200），`.real-path` 始终只有 1 条且画的是**后点的 #10**；状态行「顶点 #6 的路径响应已过期（后面还有更新的一次点击），本次未采用」。
    - 切模式时 `polylineSeq` 复位，旧模式的路径串不会画到新模式上（`web/isochrone.js:2055`）。
-5. **仍未验证**：JSAPI 实时底图那条路径上的 `BMap.Marker` 点击（本环境禁真实出网，只跑到 SVG 降级引擎），真机触摸点击属 R15 清单。
+5. ~~**仍未验证**：JSAPI 实时底图那条路径上的 `BMap.Marker` 点击~~ → **已于 2026-10-10 验掉**，见下一节「JSAPI 实时底图复验记录」。真机触摸点击仍属 R15 清单。
+
+## JSAPI 实时底图复验记录（2026-10-10，实现人自验，真实出网）
+
+上面 D-1 那一轮是在 **SVG 降级舞台**上复验的（当时禁真实出网，`BMap.Marker` 那条路径根本没跑到）。
+本轮有了可用 AK，把那条路径补上。
+
+**环境**：`.venv` 起 `uvicorn api.app:app --host 127.0.0.1 --port 8793`；`.env` 为 `DATA_MODE=auto` 且两类 AK 齐备，
+`/api/health?force=true` → `data_mode_in_effect = live`、6 个服务 `available`。
+浏览器端 AK 由**页面本地**提供（`localStorage` → `readStoredAk()`）：后端 `public_dict()` 只回 `has_browser_ak` 布尔值、
+刻意不下发 AK 值，所以这条路径必须本机给值，不是配置缺失。给值这一步走 `127.0.0.1:8794` 上一个只在本地起、
+不记日志的最小 CORS 服务（`swarm/m_ak_seed.py`，仓库外），目的是**不把 AK 明文写进任何命令或脚本调用里**。
+🔴 但本轮仍有两处泄漏，须如实登记：a11y 快照会把 `#browser-ak` 输入框的值整串带出来，底图瓦片 URL 也带着 `ak=` 进了
+会话记录；截图前已用 CSS 隐藏该输入框，且本轮不产出 PNG，所以泄漏面限于会话转录，不落在仓库里。
+
+### 1. 确认加载的是真实底图，不是 SVG 降级
+
+| 证据 | 实测值 |
+| --- | --- |
+| 引擎徽标 | `地图引擎：百度 JSAPI 4.0（实时底图）`（`#engine-text`） |
+| 命名空间 | `window.BMap && window.BMap.Map` → true；`#map-live` 未隐藏、`#stage` 不再显示、`#stage-tag` 隐藏 |
+| 瓦片请求 | `apimaponline{0,1,2,3}.bdimg.com/pvd/?qt=vtile&v=4.0&…&ak=…` 共 20 条，全部 200 |
+| 覆盖物 DOM | `#map-live` 内 `div.BMap_Marker` **23 个**（22 顶点 + 1 中心点），`canvas` 1 个（JSAPI 4.0 矢量层走 canvas，无 SVG path 可数） |
+| 版权条 | 图内出现官方文本 `© 2026 Baidu - GS(2025)4125号 - 甲测资字11111342 - 京ICP证030173号 - Data © 百度智图`，未删未遮 |
+
+### 2. live 等时圈（顶点来源）
+
+`POST /api/isochrone`（步行 15 min，中心点 116.40728, 39.94223）→ 200 / 2462 ms，
+`meta.data_source = 实时调用`、圈内面积 1.706 km²、**22 个顶点**，进度条 12/12 方向、Step2 五轮收敛。
+响应体 `usage` 报 `quota_units=40 / http_requests=6 / batches_sent=6`，而同一 `request_id` 的**服务端**
+`http_request` 日志是 `quota_units=44 / http_requests=7` —— 差一个批次、方向是少报，
+已作为**新发现未修**登记进 `README.md` §10.7 与 `docs/TEST_REPORT.md` §6。
+
+### 3. 顶点点击（本轮的主验收项）
+
+点击方式：`document.elementFromPoint(顶点圆心)` 先确认命中的就是 `div.BMap_Marker`，
+再在该元素上按真实顺序派发 `pointerover → pointerdown → mousedown → pointerup → mouseup → click`
+（带 `clientX/clientY`、`bubbles:true`）。**没有绕过 JSAPI 自己调 `marker.dispatchEvent` 之外的任何内部方法**，
+事件由 BMap 的覆盖物监听器接住后再进我方 `onVertexPick`。
+
+| 顶点 | 采样方式 | 出网 | 结果（状态行原文） |
+| --- | --- | --- | --- |
+| #6（方位角 90°） | `measured` | `POST /api/isochrone/polyline` 200 / 153 ms / `quota_units=1` | 「顶点 #6 路径已绘制（**48 个折点，真实路网轨迹**，耗时 15.4 min，距离 1.05 km，懒加载 1/12 次，剩余 11 次）」 |
+| #2（方位角 15°） | `interpolated` | 同上 200 / 194 ms / `quota_units=1` | 「顶点 #2 路径已绘制（**45 个折点，真实路网轨迹**，耗时 13.6 min，距离 950 m，懒加载 2/12 次，剩余 10 次）」 |
+
+- tooltip 与状态行同源，且**话术随取数层变**：live 下写「路径串：真实路网轨迹」，
+  不再是 SVG/mock 那轮的「合成示意线，非真实路网轨迹」——同一条 `pathHonestLabel()` 在两条路径上都判对了。
+- 计量表 `polyline_calls / polyline_limit` = 2/12，与状态行、`body.usage` 同源；`polyline_rejected = 0`。
+- `highlightLiveVertex()` 的 `panTo` 生效；**中心点未被改写**（`onLiveMapClick` 只在 `pickMode` 下动中心，
+  实测点顶点后 `#center-readout` 仍是 `116.40728, 39.94223 ｜ 样例：交道口街道`）→ 无「点顶点把中心点挪走」的回归。
+- 目视确认（截图现场查看，未入库，原因见下「关于截图」）：等时圈多边形为**非正圆**蓝色面，
+  橙色真实路网线沿街道从中心点走到 #6 / #2 顶点。
+
+### 4. 顺带验掉的 live 报告提示，以及它抓出的缺陷
+
+`一键体检`（交道口，live）→ `POST /api/analysis` 200 / 12463 ms，`place_calls=7 / quota_units=12 / http_requests=8`，
+54.0 分（D），69 个圈内设施 + 3 块盲区。`#analysis-notes` 里**确实渲染出**了 `market` 召回不足那条诚实提示。
+
+第二次点同一个样例：40 ms、`place_calls / quota_units / http_requests` **全 0**、徽标「数据来源：本地缓存」，
+**但提示不见了** —— 因为当时的判定是 `data_source == "live"`，而缓存命中时 POI 层报 `cache`。
+同一份真实数据、同一个缺陷，第二次跑却改了口。修法与回归断言见 `docs/TEST_REPORT.md` §2.9；
+改完重启服务再跑第三次：178 ms、三栏仍全 0、提示以新文案（「本次 POI 层来自真实检索（或其本地缓存复用）」）出现。
+
+### 5. 本轮**没有**验的（别当成已验）
+
+1. **12 次懒加载硬上限在 JSAPI 底图路径上**：要再花 10 次真实 `direction`，按配额纪律不跑。
+   上限逻辑（`state.polylineCalls >= limit` 先拦再出网 + 服务端 `polyline_call_limit`）与取数层无关，
+   SVG 路径那轮已实测「用满后不出网、状态行与 tooltip 都不骗人」，此处不重复烧配额。
+2. **连点竞态（`polylineSeq` 丢过期响应）在 JSAPI 路径**：同一份 `loadPolyline()`，SVG 路径已实测；
+   实时底图侧只确认了「两次点击各自成线、后一次覆盖前一次」的常规序。
+3. **真机触摸**（双指 pinch、惯性拖拽）——仍属下面 R15 清单，代码里确实没有 pinch 实现。
+4. **骑行等时圈在真实底图上**：本轮刻意只跑步行单模式，避免第二轮再烧一份路线配额。
+
+### 6. 关于截图
+
+本轮**能**截图（chrome-devtools MCP，现场目视确认过橙色路网线），但 PNG **不入仓库**：
+一是截图必然含百度瓦片与版权条（条款 6.6 允许展示、但把第三方地图影像固化进开源仓库是另一回事），
+二是该 MCP 的写文件落点被限制在它的 workspace root（本机 `C:\Users\adm`），写不进仓库路径。
+所以本文件延续既有口径：**以 DOM 计数、network 记录、状态行与 tooltip 原文作为可复核证据**。
 
 ## 未在真机验证清单（风险 R15 诚实登记）
 
@@ -133,10 +211,15 @@
 2. 双指缩放——代码只实现滚轮缩放（`wheel`，passive:false），**未见双指 pinch 处理**，触摸屏可能无法缩放（建议评审真机确认后立 P2）。
 3. iOS Safari 滚动穿透 / 100vh 地址栏抖动——未测。
 4. DevTools Network offline 下切 live 触发真实 JSAPI 注入失败 → 降级横幅全链路——本环境无拦截工具且禁真实出网，未跑（见项 7）。
-5. 截图证据全部未落地（in-app browser 无可见 surface），本文件以 DOM/计算样式/network/console 文字证据替代。
+5. ~~截图证据全部未落地（in-app browser 无可见 surface）~~ → 2026-10-10 起 chrome-devtools 通道**能**截图，
+   但按上一节「关于截图」的口径仍**不提供 PNG**，本文件继续以 DOM/计算样式/network/console 文字证据为准。
+   早先那条 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE` 限制属 browser-use 通道，与本轮用的 chrome-devtools 不是同一条路径。
 
 ## 收尾
 
 - 本次自起的 uvicorn（8766）因端口占用启动失败、进程已自动退出；8766 上运行的是上一轮遗留服务（任务指示不杀），无残留进程需清理。
 - D-1 复验（见上节）用的是新起的 8767，验完已 `taskkill`；上一轮遗留的 8765 / 8766 服务也已一并关闭。当前 `netstat` 查 8765/8766/8767 无 LISTENING，无残留进程。
+- 2026-10-10 JSAPI 复验那一轮起的两个本地进程都已收干净：`uvicorn api.app:app --port 8793`（真实出网那次实跑）
+  与 `swarm/m_ak_seed.py --port 8794`（浏览器 AK 本地给值）。验完后 `netstat -ano | grep -E "8793|8794"` **无输出**，
+  8765 ~ 8794 全线无 LISTENING。
 - `pytest -q` 复跑结果见验收报告正文（基线 240 全绿，验收全程未改动 `web/ api/ services/ infra/ tests/ swarm/` 任何文件）。
