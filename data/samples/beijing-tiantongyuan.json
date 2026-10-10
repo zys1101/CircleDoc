@@ -2,7 +2,7 @@
   "generator": {
     "tool": "tools/gen_samples.py",
     "version": "1.0",
-    "generated_at": "2026-10-05T14:13:00+00:00",
+    "generated_at": "2026-10-10T07:37:50+00:00",
     "method": "等时圈由本项目的扇形采样 + 二分收敛算法配合确定性合成速度场（三次谐波各向异性 + 一条顺畅走廊 + 两道阻隔扇区，种子取自中心点坐标）算出；设施点由 POI 维度词表按虚构网格外推。**不含任何百度地图返回内容。**",
     "deterministic": true,
     "seed_source": "center_coordinates",
@@ -30,29 +30,29 @@
     "city": "北京",
     "district": "昌平区",
     "lnglat": [
-      116.418,
-      40.075
+      116.431025,
+      40.076584
     ],
     "form": "新建大盘社区",
     "archetype": "new_district",
-    "coord_verified": false,
+    "coord_verified": true,
     "coordinate_system": "bd09ll",
-    "note": "超大型新建居住区，生活配套沿主路带状分布，内部存在「配套不足」区域。 坐标待用 /api/suggest 核验后回填。\n"
+    "note": "坐标已实调核验（suggest:天通苑）：匹配到「天通苑」住宅区本身（同区候选里按 精确同名优先，未取排在前面的「天通苑-地铁站」），逆地理确认落在 昌平区 天通苑北街道（北京市昌平区天通苑北街道立水桥东二路）。核验于 2026-10-10。\n"
   },
   "baseline": {
     "score": {
-      "total": 84.66,
+      "total": 80.97,
       "grade": "B",
       "radar": {
-        "medical": 74.09,
+        "medical": 75.0,
         "education": 100.0,
         "shopping": 100.0,
         "leisure": 100.0,
-        "transit": 95.76,
+        "transit": 96.16,
         "food": 100.0
       },
-      "penalty": -9.22,
-      "blind_area_pct": 18.4396,
+      "penalty": -13.16,
+      "blind_area_pct": 26.328,
       "weight_sum": 0.95,
       "normalized": true,
       "reference_only": [
@@ -69,20 +69,20 @@
       "convenience": 1
     },
     "nearest_minutes": {
-      "medical": 4.2,
-      "education": 3.56,
-      "shopping": 2.7,
+      "medical": 2.84,
+      "education": 3.46,
+      "shopping": 2.44,
       "leisure": 2.91,
-      "transit": 3.56,
-      "food": 2.7,
+      "transit": 3.46,
+      "food": 2.15,
       "convenience": 2.91
     },
     "blind_spots": {
-      "count": 2,
-      "area_pct": 18.4396,
-      "area_km2": 0.5,
+      "count": 3,
+      "area_pct": 26.328,
+      "area_km2": 0.875,
       "levels": {
-        "blind": 1,
+        "blind": 2,
         "insufficient": 1
       },
       "missing": [
@@ -134,9 +134,9 @@
       }
     },
     "summary": [
-      "最弱项：基础医疗 74.09 分，圈内 1 个、达标阈值 2 个，是本次最该优先补齐的方向。",
+      "最弱项：基础医疗 75 分，圈内 1 个、达标阈值 2 个，是本次最该优先补齐的方向。",
       "最强项：教育 100 分（配套充足），圈内 1 个、达标阈值 1 个。",
-      "服务盲区：识别到 2 处，占圈内面积 18.4396%（按 1000 m 半径判定），缺失类别：market, pharmacy, primary_school。",
+      "服务盲区：识别到 3 处，占圈内面积 26.328%（按 1000 m 半径判定），缺失类别：market, pharmacy, primary_school。",
       "实测覆盖：11 个点位有实测时间、2 个未实测（前 K 截断 / 圈外 / 探测器不可用）；未实测点位不参与时效评分。",
       "数据来源：本次结论基于程序合成的示例数据（mock_mode），不是实时路网与实时检索结果，仅作辅助性量化参考。"
     ]

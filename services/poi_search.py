@@ -67,6 +67,7 @@ from services.poi_categories import (
     PAGE_SIZE,
     PLACE_CALLS_PER_ANALYSIS,
     PLACE_RADIUS_MAX_M,
+    SCOPE_DETAIL,
     SUBCAT_LABEL_CN,
     SUBCAT_OFFICIAL_PATH,
     TOTAL_CAP,
@@ -568,7 +569,9 @@ class PoiSearchService:
         与客户端不一致的字段不会报错，只会让「实时写入 → 下次命中」变成 miss，
         表现是缓存命中率静默归零。`coord_type` 是数字 3（不是字符串，也不是
         逆地理的 `coordtype`），`radius_limit=True` 必带（FAQ 2544：半径跨城会
-        退化为城市范围检索），`page_num` 恒 1（不翻页）。
+        退化为城市范围检索），`page_num` 恒 1（不翻页），
+        `scope=SCOPE_DETAIL` 必带（见 `poi_categories.SCOPE_DETAIL`：不带它就没有
+        `detail_info`，整条分类链路失效）。
         """
         return {
             "query": str(spec["query"]),
@@ -579,6 +582,7 @@ class PoiSearchService:
             "location": to_baidu_latlng({"lng": lng, "lat": lat}),
             "radius": min(max(1, int(radius)), PLACE_RADIUS_MAX_M),
             "radius_limit": True,
+            "scope": SCOPE_DETAIL,
         }
 
     # ------------------------------------------------------------------ 单个维度：三层链
@@ -639,6 +643,10 @@ class PoiSearchService:
                 page_size=PAGE_SIZE,
                 page_num=PAGE_NUM,
                 radius_limit=True,
+                # 🔴 缺了 `scope=2` 就没有 `detail_info`，`tag`/`classified_poi_tag` 全空，
+                # 每个 POI 都判成 other → 盲区判定把配套密集的社区报成 95% 完全盲区。
+                # 见 `services/poi_categories.py:SCOPE_DETAIL` 的实测记录。
+                scope=SCOPE_DETAIL,
             )
         except CircleDocError as exc:
             log_fields(logger, logging.WARNING, "poi_live_rejected", dim=key, code=exc.error_id)

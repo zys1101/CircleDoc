@@ -85,7 +85,22 @@ def _strip_volatile(report: dict[str, Any]) -> dict[str, Any]:
 
 
 async def generate_one(community: SampleCommunity) -> dict[str, Any]:
-    """按社区坐标与形态跑一次 **mock** 体检，返回冻结后的基线对象。"""
+    """按社区坐标与形态跑一次 **mock** 体检，返回冻结后的基线对象。
+
+    🔴 **必须关掉缓存**（`cache_enabled=False`）。原因：三层降级链是
+    `live → cache → sample`，而 `data_mode="mock"` 只表示「不出网」，**不表示「不读缓存」**
+    —— `services/poi_search.py:_resolve_dimension` 在进入 mock 分支之前照样先读一次本地缓存。
+    于是同一台机器上：跑过 live 的人生成出来的基线混进了**真实 POI**，
+    没跑过的人生成出来的是**纯合成 POI**，两者 counts 与盲区面积完全不同。
+
+    基线是**回归夹具**（`tests/test_samples_baseline.py` 逐字段比对），
+    它的契约必须是「在没有任何真实数据的环境下，mock 长什么样」。所以生成时必须关缓存。
+    这**不改运行期语义**，只影响本生成器。
+
+    （实测踩过：全量测试跑到基线比对会失败、单独跑该文件却通过 —— 差别就是前面那些
+    live 用例往同一个 SQLite 里写了缓存。）
+    """
+    baseline_settings = get_settings().model_copy(update={"cache_enabled": False})
     report = await run_analysis(
         list(community.lnglat),
         modes=["walking"],
@@ -93,6 +108,7 @@ async def generate_one(community: SampleCommunity) -> dict[str, Any]:
         data_mode="mock",
         platform="desktop",
         archetype=community.archetype,
+        settings=baseline_settings,
     )
     pruned = _strip_volatile(report)
     return {
@@ -247,13 +263,43 @@ def cmd_check(args: argparse.Namespace) -> int:
 # --verify：用真实接口核验坐标并回填 samples.yaml
 # --------------------------------------------------------------------------------------
 async def cmd_verify(args: argparse.Namespace) -> int:
-    """逐社区走地理编码 + 逆地理，把取到的坐标与结构化地址回填 `config/samples.yaml`。
+    """逐社区核验中心点坐标，回填 `config/samples.yaml`（PRD §10-1 规程②）。
 
     🔴 这一步**必须配好服务端 AK**，也是 PRD §10-1 规程②要求的那个动作
     （「坐标一律不凭记忆写死」）。没有 AK 时它会明确失败，而不是「看起来成功了」。
+
+    🔴 **必须显式传 `data_mode="live"`**。原因是个容易踩的坑：`data_mode=auto` 要等
+    `/api/health` 的启动探测才解析成具体值，而**命令行进程从来不会跑那个探测**
+    （`probed_data_mode` 只活在跑过探测的那个进程里，不落盘）。于是 `Settings.data_mode_in_effect`
+    在这个 CLI 里永远是保守兜底的 `mock`，每一次地理编码都会得到 `degraded_reason=mock_mode`
+    —— 表现是「明明配了 AK，这个工具却永远说拿不到坐标」。这不是配额问题，是取数模式没打开。
+
+    🔴 **两条核验路径，且必须校验结果质量**（这是第一版最严重的错误）：
+
+    第一版只走地理编码、且**只要 `lnglat` 非空就标 `coord_verified: true`**。实测跑出来：
+
+    | 查询 | 拿到的坐标 | 行政区 | 官方 `level` | 判定 |
+    | --- | --- | --- | --- | --- |
+    | 交道口街道 | 116.4073, 39.9422 | 东城区 | **乡镇** | ✅ 真的解析到了 |
+    | 天通苑 | 116.4134, 39.9109 | **东城区东华门** | **城市** | ❌ 退化到市中心 |
+    | 肖家河 | 116.4134, 39.9109 | **东城区东华门** | **城市** | ❌ 与上一条完全相同 |
+
+    「天通苑」在昌平区，却被解析到东城区的市政府地址；「肖家河」拿到一个**一模一样**的坐标。
+    只检查「非空」会把这三条一起标成「已核验」—— 那是在核验记录上撒谎，比不核验更糟。
+
+    所以现在的规则是：
+
+    1. **优先走 `/api/suggest`**（PRD §10-1 明文指定的路径，也是唯一能给出 POI 级
+       精度的接口）。它默认关闭（FR-108），需 `SUGGEST_ENABLED=true`；每次调用占 1 次
+       地点检索配额（与 `/api/place` 共用 100 次/日），工具会把消耗如实报出来。
+    2. **地理编码只作兜底**，且查询串必须带上城市与行政区（`北京市昌平区天通苑北街道`），
+       并**拒绝 `level == "城市"`** 的结果 —— 那是「没解析到具体地点」的官方信号。
+    3. **行政区交叉核对**：最终坐标的 `district` 必须与清单里写的行政区一致，
+       不一致就拒绝该社区并说明。这一条正是能挡住上面那个「天通苑 → 东城区」的检查。
+    4. 任何一条拒绝，整次核验就**不改文件**并返回非零退出码。
     """
     import yaml
-    from services.geo import GeoService
+    from services.geo import GeoService, suggest_enabled
 
     settings = get_settings()
     if not settings.has_server_ak:
@@ -269,32 +315,137 @@ async def cmd_verify(args: argparse.Namespace) -> int:
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 2
 
+    # `data_mode="live"` 是本工具能工作的前提，理由见 docstring。
+    live_mode = "live"
+    use_suggest = suggest_enabled(settings)
+    if not use_suggest:
+        print(
+            "[warn] /api/suggest 未启用（FR-108 默认关闭）。将只走地理编码兜底，"
+            "并拒绝解析到「城市」级的结果 —— 那通常意味着拿不到社区级坐标。\n"
+            "       想用 PRD 指定的 suggest 路径：先 `SUGGEST_ENABLED=true` 再跑本命令。"
+        )
+
     service = GeoService(settings)
     updates: dict[str, dict[str, Any]] = {}
+    rejects: list[str] = []
+    place_calls = 0
+
     for community in communities:
-        query = args.query_template.format(name=community.name.split("（")[0], city=community.city)
-        outcome = await service.geocode(query, city=community.city)
-        payload = outcome.as_dict()
-        lnglat = payload.get("lnglat")
-        if not lnglat:
-            print(
-                f"[FAIL] {community.id}: 地理编码未返回坐标"
-                f"（{payload.get('degraded_reason') or payload.get('message')}）",
-                file=sys.stderr,
+        bare = community.name.split("（")[0].strip()
+        picked: dict[str, Any] | None = None
+        source = ""
+
+        if use_suggest:
+            outcome = await service.suggest(bare, region=community.city, data_mode=live_mode)
+            payload = outcome.as_dict()
+            place_calls += int((payload.get("usage") or {}).get("place_calls") or 0)
+            # 候选排序：**精确同名 > 以关键字开头 > 名字更短 > 原始顺序**。
+            # 为什么不是「取第一条」：百度的排序对「天通苑」把「天通苑-地铁站」排在
+            # 「天通苑」住宅区之前，而本清单要的是**社区中心点**不是交通设施 ——
+            # 精确同名那条才是居住区本身。名字更短作为次级判据，是因为长名字通常是
+            # 「XX店」「XX-道路」这类具体设施，比社区整体偏一些。
+            candidates = []
+            for order, item in enumerate(payload.get("items") or []):
+                district = str(item.get("district") or item.get("area") or "")
+                lnglat = item.get("lnglat") or item.get("location")
+                if not lnglat:
+                    continue
+                # 同名地点很多：只认行政区对得上的那一条（例如「天通苑」在别的城市也有）。
+                if community.district and community.district not in district:
+                    continue
+                name = str(item.get("name") or "")
+                rank = (
+                    0 if name == bare else 1 if name.startswith(bare) else 2,
+                    len(name),
+                    order,
+                )
+                candidates.append((rank, item, district, lnglat, name))
+            if candidates:
+                candidates.sort(key=lambda entry: entry[0])
+                _, item, district, lnglat, name = candidates[0]
+                picked = {
+                    "lnglat": [round(float(lnglat[0]), 6), round(float(lnglat[1]), 6)],
+                    "name": name,
+                    "district": district,
+                    "level": "poi",
+                }
+                source = f"suggest:{name}"
+                if len(candidates) > 1:
+                    print(
+                        f"       （{community.id}: {len(candidates)} 条同区候选，"
+                        f"按精确同名优先选中「{name}」）"
+                    )
+            if picked is None:
+                print(f"[warn] {community.id}: suggest 无匹配候选，改用地理编码兜底。")
+
+        if picked is None:
+            query = args.query_template.format(
+                name=bare, city=community.city, district=community.district or ""
             )
-            return 1
-        regeo = (await service.regeo(f"{lnglat[0]},{lnglat[1]}")).as_dict()
+            outcome = await service.geocode(query, city=community.city, data_mode=live_mode)
+            payload = outcome.as_dict()
+            lnglat = payload.get("lnglat")
+            level = str(payload.get("level") or "")
+            if not lnglat:
+                rejects.append(
+                    f"{community.id}: 地理编码未返回坐标"
+                    f"（{payload.get('degraded_reason') or payload.get('message')}）"
+                )
+                continue
+            # 🔴 「城市」级 = 没解析到具体地点，坐标是市中心，不是这个社区。
+            if level == "城市":
+                rejects.append(
+                    f"{community.id}: 「{query}」只解析到**城市**级（confidence="
+                    f"{payload.get('confidence')}），坐标是市中心而不是该社区；"
+                    "请改用更精确的查询串（带上行政区/街道）或开启 SUGGEST_ENABLED。"
+                )
+                continue
+            picked = {
+                "lnglat": [round(float(lnglat[0]), 6), round(float(lnglat[1]), 6)],
+                "name": query,
+                "district": "",
+                "level": level or "?",
+            }
+            source = f"geocode:{level}"
+
+        # 逆地理：既取结构化地址，也用来交叉核对行政区。
+        regeo = (
+            await service.regeo(f"{picked['lnglat'][0]},{picked['lnglat'][1]}", data_mode=live_mode)
+        ).as_dict()
+        actual_district = str(regeo.get("district") or "")
+
+        if community.district and actual_district and community.district != actual_district:
+            rejects.append(
+                f"{community.id}: 行政区不符 —— 清单写「{community.district}」，"
+                f"实测落在「{actual_district}」（{regeo.get('formatted_address')}）。"
+                "这通常意味着查询串解析到了别的同名地点，必须换查询词。"
+            )
+            continue
+
         updates[community.id] = {
-            "lnglat": [round(float(lnglat[0]), 6), round(float(lnglat[1]), 6)],
-            "district": regeo.get("district") or community.district,
+            "lnglat": picked["lnglat"],
+            "district": actual_district or community.district,
             "town": regeo.get("town"),
             "formatted_address": regeo.get("formatted_address"),
-            "coord_verified": True,
+            "matched": picked.get("name"),
+            "level": picked.get("level"),
+            "source": source,
         }
         print(
-            f"[ok] {community.id:26} {query} -> {updates[community.id]['lnglat']}  "
-            f"({regeo.get('district')} {regeo.get('town') or ''})"
+            f"[ok] {community.id:26} {str(picked.get('name'))[:22]:22} "
+            f"-> {picked['lnglat']}  ({actual_district} {regeo.get('town') or ''}) [{source}]"
         )
+
+    print(f"\n本次核验消耗：地点检索 {place_calls} 次（个人档 100 次/日，与 /api/place 共用）")
+
+    if rejects:
+        print("\n[FAIL] 有社区未能核验，**未改写任何文件**：", file=sys.stderr)
+        for item in rejects:
+            print(f"  - {item}", file=sys.stderr)
+        return 1
+    if len(updates) != len(communities):
+        print("[FAIL] 核验结果不完整，未改写任何文件。", file=sys.stderr)
+        return 1
 
     if args.dry_run:
         print("\n--dry-run：只打印，未改写 config/samples.yaml")
@@ -302,27 +453,36 @@ async def cmd_verify(args: argparse.Namespace) -> int:
         return 0
 
     path = Path(settings.samples_config_path)
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    original = path.read_text(encoding="utf-8")
+    raw = yaml.safe_load(original) or {}
     for entry in raw.get("communities") or []:
         patch = updates.get(str(entry.get("id")))
         if not patch:
             continue
         entry["lnglat"] = patch["lnglat"]
         entry["coord_verified"] = True
-        if patch.get("town"):
+        if patch.get("district"):
             entry["district"] = patch["district"]
         entry["note"] = (
-            f"坐标已实调核验：{patch['formatted_address']}"
-            f"（核验于 {datetime.now(UTC).date().isoformat()}）"
+            f"坐标已实调核验（{patch['source']}）：匹配到「{patch.get('matched')}」，"
+            f"逆地理确认落在 {patch['district']} {patch.get('town') or ''}"
+            f"（{patch['formatted_address']}）。核验于 {datetime.now(UTC).date().isoformat()}。"
         )
     raw["verified_at"] = datetime.now(UTC).date().isoformat()
+    # ⚠️ `yaml.safe_dump` 会把本文件里那大段「规程说明」注释全部抹掉，而那段注释正是
+    #    `coord_verified` 纪律的出处。所以备份原文，回填后提示人工合并。
+    backup = path.with_suffix(".yaml.bak")
+    backup.write_text(original, encoding="utf-8")
     path.write_text(
-        "# 本文件由 tools/gen_samples.py --verify 回填过坐标，请人工复核后提交。\n"
+        "# ⚠️ 本文件由 tools/gen_samples.py --verify 回填过坐标；"
+        f"改写前的原文备份在 {backup.name}。\n"
+        "# yaml.safe_dump 会丢掉注释，请把原文顶部的「规程说明」段落合并回来再提交。\n"
         + yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
     print(f"\n已回填 {path}")
-    print("⚠️ 人工复核坐标无误后再提交；提交前请重新运行 `gen_samples.py` 刷新基线。")
+    print(f"⚠️ 原文（含规程说明注释）备份为 {backup}")
+    print("⚠️ 提交前请：① 把注释合并回 samples.yaml；② 重新跑 `gen_samples.py` 刷新基线。")
     return 0
 
 

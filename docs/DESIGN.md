@@ -7,7 +7,7 @@
 | 唯一事实出处 | 配额、接口路径、参数名、状态码、合规条款一律以 `docs/BAIDU_API_NOTES.md` 为准；本文**不复制**该笔记内容 |
 | 对比数据留档 | `docs/bench_route_strategy.json`（由 `tools/bench_route_strategy.py` 生成） |
 | 测试与验证记录 | `docs/TEST_REPORT.md`；前端验收记录 `docs/shots/README-isochrone-acceptance.md` |
-| 最后更新 | 2026-10-05 |
+| 最后更新 | 2026-10-10 |
 
 ---
 
@@ -38,9 +38,10 @@
 | **推算** | 依赖真实网络的量：线上墙钟耗时。RTT 是**显式假设参数**，不是测出来的 |
 | **未验证** | 本项目条件下无法验证，明确登记在第 12 章，不当作「已通过」 |
 
-🔴 本项目**从未有过可用的百度 AK**，因此没有一条 `live` 模式的端到端记录。所有「实时链路」
-验证都在 `httpx.MockTransport` 上完成——这不只是条件所限，也是条款 3.2.3(ii) 的要求
-（它禁止对百度线上服务施压测试，而「跑 96 次串行 `direction`」正是一种压测）。
+🔴 2026-10-10 起本项目**已接入真实百度 AK，并有 `live` 模式端到端记录**（三样例实跑见
+`docs/TEST_REPORT.md` §4.3）。但**压测类实验仍然只在 `httpx.MockTransport` 上完成**——这不只
+是条件问题，也是条款 3.2.3(ii) 的要求：它明文禁止对百度线上服务施压测试，而「跑 96 次串行
+`direction`」正是一种压测。两类证据的口径不同，本文与测试报告都**分开陈述、不互相顶替**。
 
 ---
 
@@ -868,8 +869,8 @@ PRD §4.5 要的是**可替换**，不是可阅读。」
 
 | 样例 | 建成形态 | 圈内点位数 | 总分 | 等级 |
 | --- | --- | ---: | ---: | --- |
-| `beijing-jiaodaokou` | 成熟老城 | **48** | **67.25** | **C** |
-| `beijing-tiantongyuan` | 新建大盘 | 14 | **84.66** | **B** |
+| `beijing-jiaodaokou` | 成熟老城 | **48** | **61.40** | **C** |
+| `beijing-tiantongyuan` | 新建大盘 | 14 | **80.97** | **B** |
 
 **设施更全的老城社区拿到 C，配套稀疏的新建大盘拿到 B。** 这与事实相反，会直接误导评审。
 
@@ -906,9 +907,9 @@ PRD §4.5 要的是**可替换**，不是可阅读。」
 
 | 样例 | 总分 | 等级 | 六维雷达最小值 |
 | --- | ---: | --- | ---: |
-| `beijing-jiaodaokou` | **96.20** | **A** | 100 |
-| `beijing-tiantongyuan` | 84.66 | B | 74.09 |
-| `beijing-xiaojiahe` | 44.42 | D | 0 |
+| `beijing-jiaodaokou` | **98.24** | **A** | 100 |
+| `beijing-tiantongyuan` | 80.97 | B | 75.0 |
+| `beijing-xiaojiahe` | 44.65 | D | 0 |
 
 排序符合建成形态的事实。回归覆盖：
 `tests/test_coverage.py::test_fair_selection_prevents_the_dense_area_score_inversion`。
@@ -1004,7 +1005,7 @@ PRD §4.5 要的是**可替换**，不是可阅读。」
 
 | # | PRD 字面 | 实际做法 | 触发原因 | 证据 | 回退方式 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | §4.3：全局最近前 K 个 | `SELECTION_FAIR` 分层挑选 | 字面口径导致密集社区得分倒挂 | 交道口 67.25 C < 天通苑 84.66 B | `selection=SELECTION_NEAREST` |
+| 1 | §4.3：全局最近前 K 个 | `SELECTION_FAIR` 分层挑选 | 字面口径导致密集社区得分倒挂 | 交道口 61.40 C < 天通苑 80.97 B（2026-10-10 坐标核验后重算） | `selection=SELECTION_NEAREST` |
 | 2 | §5：ECharts 雷达/柱状 | `drawRadar()` / `drawBars()` 手绘 SVG | ECharts 整包最小 647 KB + Vue 143 KB，超 500 KB 预算 58 % | `web/report.js` 模块 docstring | vendored ECharts `common` + Vue |
 | 3 | D2：Vue 3 global build | 原生 JS，`web/vendor` 不存在 | M2 起即原生；窄接口 + 单状态已解决 D2 的原始担忧 | `isochrone.js` 纪律 3、`report.js` 第 1 条 | 重写为 Vue 组件（结构性改动） |
 
@@ -1082,7 +1083,7 @@ mock 掉网络层，连发 20 个请求：
 | 限流排队行为（等待次数、单次等待、总耗时） | **实测** | 本地 0.5 QPS 桶 + `MockTransport`，零出网 |
 | 线上墙钟耗时（38.4 s / 0.8 s） | **推算** | `max(请求数 × RTT, 请求数 / 桶速率)`；**RTT 120 ms 与 2.5 QPS 都是显式假设参数** |
 | 「推算提速 48.0×」 | **推算** | 由上式导出，不是实测 |
-| `live` 模式端到端耗时 | **未验证** | 本项目从未有过可用 AK |
+| `live` 模式端到端耗时 | **实测**（2026-10-10） | 三样例 live 首跑 14.6 ~ 16.1 s（`docs/TEST_REPORT.md` §4.3）；**单次运行值**，受当时网络与配额排队影响，别当常量 |
 
 **复现性说明**（本轮实测）：重跑该脚本后，**结构性数字逐字节可复现**——
 `http_requests`（96 / 2）、`quota_units`（96 / 96）、`batch_sizes`（`[50, 46]`）、
@@ -1106,11 +1107,12 @@ mock 掉网络层，连发 20 个请求：
 
 | 项 | 原因 | 对本文哪一节有影响 |
 | --- | --- | --- |
-| **`live` 模式端到端** | 本项目从未有过可用百度 AK | §2 `blocked` 判据、§3 限流、§11 全部「推算」项；演示预案 A 必须在有 AK 的机器上另行实跑 |
-| **`docker compose up` / `docker build`** | 开发机没有 Docker | §1 部署形态、§6.1 「镜像不预置 `.db`」只做过静态校验（YAML 解析、指令与上下文路径核对、`.dockerignore` 规则推演） |
-| **真实测时 vs 插值推算的偏差统计** | 无可用的 live 测时样本 | §2.5 精度取舍只能给出机制说明，给不出偏差数字。待补：拿到 AK 后对同一样例各跑一次 `live` 与 `mock`，比较 `area_km2` 与各维度 `count_in` |
+| ~~**`live` 模式端到端**~~ | ✅ **2026-10-10 已补验**（`docs/TEST_REPORT.md` §4.3） | §11 的推算模型已被一次真实实跑落在 PRD 目标内（14.6 ~ 16.1 s ≤ 25 s）；但 §2 `blocked` 判据与 §3 限流**仍只在 `MockTransport` 上验**——条款 3.2.3(ii) 禁压测，这一点不因「有了 AK」而改变 |
+| **`docker compose up`** | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → 三个接口可服务）；**compose 的起停与 bind mount 写权限仍未验** |
+| **真实测时 vs 插值推算的偏差统计** | live 每样只跑过一次，**样本量 1**，凑不出偏差分布 | §2.5 的精度取舍仍只能给机制说明。待补：对同一样例各跑多次 `live` 与 `mock`，比较 `area_km2` 与各维度 `count_in` |
 | **移动端真机行为**（R15） | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
-| **样例社区坐标的真实性** | 无 AK，无法走 `/api/suggest` 或地理编码核验 | 三份清单均标 `coord_verified: false`，`/api/samples` 会把这个标记原样透出；`config/samples.yaml` 的 `lnglat` 是**区级近似占位** |
+| ~~**样例社区坐标的真实性**~~ | ✅ **2026-10-10 已补验**（`gen_samples.py --verify` 走 `/api/suggest` + 逆地理交叉核对行政区） | 三份清单标 `coord_verified: true`，含义是「**工具核验过且行政区对得上**」，不是人工实地踏勘；`/api/samples` 原样透出该标记。🔴 教训：**geocode 只能给到城市级坐标**，「非空就算核验」会把三个错坐标一起标成已核验（`docs/TEST_REPORT.md` §2.8） |
+| **`live` 模式下 `market` 的召回** | 检索词 `市场$超市$便利店` 被「市场监督管理局」（`政府机构;行政单位`）等同名机构挤占，`tag` 过滤实测反而把结果清空 | FR-221 的盲区主判定依赖 `market` ∩ `pharmacy` ∩ `primary_school`，`market` 恒为 0 → **`live` 盲区面积系统性偏大**（交道口 62.29 %、肖家河 86.89 %）。本轮口径是**接受并明示**：后端对 `data_source = live` 的报告在 `notes` 里挂提示，`mock` 口径不受影响。试验数据与三条约束见 `docs/TEST_REPORT.md` §4.4 |
 | **浏览器内真实渲染** | 本环境的无头 Chrome 无输出 | §10.2 / §10.3 的图表与 DOM 结论来自 `tools/report_dom_smoke.mjs`（Node + 最小 DOM 打桩，12 项断言通过），它**不是**真实浏览器 |
 | **PNG 报告导出** | 功能未实现 | §6.4：条款 6.6 的「截图必须保留版权与审图号」目前无对应风险面，但补该功能时必须一并实现该约束 |
 | **官方未公开的数值** | 需登录控制台核实 | `localhost` 能否作为 Referer 白名单、地点检索 `page_size` 真实上限是 10 还是 20、逆地理 `pois` 返回条数上限、JSAPI 4.0 下热力图插件可用性——`§7.4` 已按保守值设计（10 且不翻页） |

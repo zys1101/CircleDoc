@@ -54,6 +54,7 @@ __all__ = [
     "RADIUS_BY_MODE_M",
     "RADIUS_FACTOR",
     "R_MAX_BY_MODE_M",
+    "SCOPE_DETAIL",
     "SCORED_DIMENSIONS",
     "SCORED_WEIGHT_SUM",
     "SUBCAT_LABEL_CN",
@@ -117,6 +118,31 @@ COORD_TYPE_BD09LL_NUMERIC = 3
 """🔴 地点检索的 `coord_type` 是**数字** 3（笔记 §6.2 / R8）。
 逆地理是 `coordtype`（无下划线）+ 字符串 `bd09ll`；路线规划是 `coord_type` + 字符串
 `bd09ll`。三种写法只差一个字符或一个引号，写错**不报错**、只会让点位静默偏移。"""
+
+SCOPE_DETAIL = 2
+"""🔴 **不加这个参数，整条 POI 分类链路就是废的**（FR-214 的命门）。
+
+官方 2.0 的 `scope`：取 1 或留空返回**基本信息**，取 2 才返回 `detail_info`。
+而 `tag` / `classified_poi_tag` / `type` / `distance` **全都只存在于 `detail_info` 里**
+（笔记 §2.3 把 `scope` 列为「其它 2.0 可选参数」，没写它决定 `detail_info` 的有无）。
+
+实测（2026-10-10，真实 AK，同一入参只差这一个参数）：
+
+    scope 缺省 → results[0] 的键 = address, area, city, detail, location, name,
+                                  province, street_id, telephone, uid
+                 **没有 detail_info**
+    scope=2   → 多出 detail_info = tag「医疗;综合医院」/ classified_poi_tag
+                                  「医疗;医院;综合医院」/ type「hospital」/ distance 1000
+
+少了它的后果不是报错，而是**静默给出错误结论**：`normalize_subcat()` 拿不到任何
+结构化文本 → 每个 POI 都判成 `other` → FR-221 的盲区判定找不到任何市场/药店/小学 →
+把配套密集的老城社区报成 **95 % 完全盲区**。
+
+⚠️ 为什么离线演示看不出来：`services/poi_search.py:SyntheticPoiSamples` 合成的报文里
+**自带 `detail_info`**（它按「百度形状」合成，而那个形状是 scope=2 的形状），
+所以 mock 模式下分类一切正常、报告也对。这个 bug 只在 live 链路暴露 ——
+合成数据「比真实更完整」反而把它盖住了，是本次接入真实 AK 才发现的。
+"""
 
 MAX_QUERY_KEYWORDS = 10
 """`$` 并集的关键字上限（笔记 §2.3）。超出时客户端抛 `status=2`，本层在词表自检就挡住。"""

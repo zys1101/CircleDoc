@@ -25,16 +25,41 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from infra.config import Settings
 
 EFFECTIVE_MODES = {"live", "cache", "mock"}
 CONFIGURED_MODES = {"auto", "live", "cache", "mock"}
 
 
+def zero_config_settings() -> Settings:
+    """**显式**造一份零配置 Settings：两个 AK 都是空串。
+
+    为什么必须显式，而不是依赖「这台机器上恰好没配 AK」：本文件测的是
+    「零配置时会怎样」（§6.2 的核心断言）。靠机器状态成立的话，开发机一旦按 README
+    配好 `.env`，这几条就会红 —— 而它们红的原因是**测试依赖了环境**，不是代码坏了。
+    CI 上没有 `.env` 所以 CI 是绿的，于是变成「本地红、CI 绿」这种最难查的形态。
+
+    构造参数优先级高于 `.env`（pydantic-settings：init > env > dotenv > 默认），
+    所以显式传空串能稳定压过仓库里的 `.env`。
+    """
+    return Settings(
+        baidu_server_ak="",
+        baidu_browser_ak="",
+        data_mode="auto",
+        cache_enabled=False,
+    )
+
+
 @pytest.fixture(scope="module")
 def client() -> TestClient:
-    from api.app import app
+    """零配置的 app。
 
-    return TestClient(app)
+    `create_app(settings)` 会把它挂到 `app.state.settings`，而 `/api/health` 正是
+    优先读 `app.state.settings`（见 `api/health.py` 的取值顺序），所以这样注入是有效的。
+    """
+    from api.app import create_app
+
+    return TestClient(create_app(zero_config_settings()))
 
 
 @pytest.fixture(scope="module")
@@ -42,6 +67,14 @@ def health(client: TestClient) -> dict:
     response = client.get("/api/health")
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def test_fixture_really_has_no_ak() -> None:
+    """先证明夹具确实是零配置 —— 否则本文件测的就不是「零配置会怎样」。"""
+    cfg = zero_config_settings()
+    assert cfg.has_server_ak is False
+    assert cfg.has_browser_ak is False
+    assert cfg.data_mode == "auto"
 
 
 # ======================================================================================

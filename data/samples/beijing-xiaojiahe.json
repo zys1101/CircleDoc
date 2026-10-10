@@ -2,7 +2,7 @@
   "generator": {
     "tool": "tools/gen_samples.py",
     "version": "1.0",
-    "generated_at": "2026-10-05T14:13:00+00:00",
+    "generated_at": "2026-10-10T07:37:50+00:00",
     "method": "等时圈由本项目的扇形采样 + 二分收敛算法配合确定性合成速度场（三次谐波各向异性 + 一条顺畅走廊 + 两道阻隔扇区，种子取自中心点坐标）算出；设施点由 POI 维度词表按虚构网格外推。**不含任何百度地图返回内容。**",
     "deterministic": true,
     "seed_source": "center_coordinates",
@@ -30,29 +30,29 @@
     "city": "北京",
     "district": "海淀区",
     "lnglat": [
-      116.283,
-      40.036
+      116.30247,
+      40.024652
     ],
     "form": "城中村 / 老旧小区",
     "archetype": "transit_corridor",
-    "coord_verified": false,
+    "coord_verified": true,
     "coordinate_system": "bd09ll",
-    "note": "城乡结合部，居住密度高但市场 / 药店 / 小学三类基础配套缺失，用作「完全盲区样本」。 坐标待用 /api/suggest 核验后回填。\n"
+    "note": "坐标已实调核验（suggest:肖家河公园）：百度候选里没有与「肖家河」精确同名的条目， 按「以关键字开头 + 名字最短」选到肖家河公园，逆地理确认落在 海淀区 马连洼街道（北京市海淀区马连洼街道林萌街）。核验于 2026-10-10。\n"
   },
   "baseline": {
     "score": {
-      "total": 44.42,
+      "total": 44.65,
       "grade": "D",
       "radar": {
         "medical": 0.0,
         "education": 0.0,
         "shopping": 83.33,
         "leisure": 100.0,
-        "transit": 98.56,
+        "transit": 100.0,
         "food": 100.0
       },
       "penalty": -15.0,
-      "blind_area_pct": 96.8115,
+      "blind_area_pct": 97.1202,
       "weight_sum": 0.95,
       "normalized": true,
       "reference_only": [
@@ -71,16 +71,16 @@
     "nearest_minutes": {
       "medical": null,
       "education": null,
-      "shopping": 2.9,
-      "leisure": 2.88,
-      "transit": 2.86,
-      "food": 2.72,
-      "convenience": 2.72
+      "shopping": 1.36,
+      "leisure": 2.87,
+      "transit": 1.36,
+      "food": 1.36,
+      "convenience": 2.87
     },
     "blind_spots": {
       "count": 1,
-      "area_pct": 96.8115,
-      "area_km2": 2.75,
+      "area_pct": 97.1202,
+      "area_km2": 3.3125,
       "levels": {
         "blind": 1
       },
@@ -135,7 +135,7 @@
     "summary": [
       "最弱项：基础医疗 0 分，圈内 0 个、达标阈值 2 个（检索无结果），是本次最该优先补齐的方向。",
       "最强项：养老休闲 100 分（配套充足），圈内 1 个、达标阈值 1 个。",
-      "服务盲区：识别到 1 处，占圈内面积 96.8115%（按 1000 m 半径判定），缺失类别：market, pharmacy, primary_school。",
+      "服务盲区：识别到 1 处，占圈内面积 97.1202%（按 1000 m 半径判定），缺失类别：market, pharmacy, primary_school。",
       "实测覆盖：10 个点位有实测时间、10 个未实测（前 K 截断 / 圈外 / 探测器不可用）；其中 medical, education 无任何实测值，时效分按 0 计；未实测点位不参与时效评分。",
       "数据来源：本次结论基于程序合成的示例数据（mock_mode），不是实时路网与实时检索结果，仅作辅助性量化参考。"
     ]

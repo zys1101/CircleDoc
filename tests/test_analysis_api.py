@@ -24,6 +24,8 @@ from fastapi.testclient import TestClient
 from infra.config import get_settings
 from services.samples import load_samples
 
+from tests.helpers import async_test
+
 ERROR_ENVELOPE_KEYS = {
     "code",
     "category",
@@ -164,14 +166,30 @@ def test_mobile_platform_halves_k_and_uses_lightweight_profile(client: TestClien
 
 
 def test_sample_id_loads_the_community_centre_and_archetype(client: TestClient) -> None:
-    """FR-102：选样例后自动采用该社区的中心点与建成形态画像。"""
+    """FR-102：选样例后自动采用该社区的中心点，并返回一份**完整**报告。
+
+    ⚠️ 这里只断言**接线契约**，不断言具体分数。原来它写死 `grade == "A"`，
+    那是一个**随数据来源变化**的产物，不是契约 —— 而且会让用例依赖缓存状态：
+    `data_mode="mock"` 只表示「不出网」，**不表示「不读缓存」**
+    （降级链是 `live → cache → sample`，缓存键里既没有 `archetype` 也没有 `data_mode`），
+    所以只要这台机器跑过一次 live，同一个请求就会命中真实 POI、分数随之改变。
+    见 `docs/TEST_REPORT.md` §2.7。
+
+    「形态画像生效」这件事由 `tests/test_samples_baseline.py` 覆盖 ——
+    那里的基线是在 `cache_enabled=False` 下生成的，缓存不会把画像盖住。
+    """
     communities, _ = load_samples(get_settings())
     community = next(item for item in communities if item.archetype == "old_town")
-    body = client.post(
-        "/api/analysis", json={"sample_id": community.id, "data_mode": "mock"}
-    ).json()
+    response = client.post("/api/analysis", json={"sample_id": community.id, "data_mode": "mock"})
+    assert response.status_code == 200
+    body = response.json()
     assert body["meta"]["center"] == pytest.approx(list(community.lnglat))
-    assert body["score"]["grade"] == "A"
+    # 报告必须是完整的，不是「选错 id 之后返回一份空壳」
+    assert body["coverage"]["groups"], "样例请求返回了空的分维度结果"
+    assert body["score"]["grade"] in {"A", "B", "C", "D"}
+    assert 0.0 <= float(body["score"]["total"]) <= 100.0
+    assert body["blind_spots"]["count"] >= 0
+    assert body["summary"], "样例请求返回了空摘要"
 
 
 def test_explicit_lnglat_wins_over_the_sample_centre(client: TestClient) -> None:
@@ -409,3 +427,62 @@ def test_poi_endpoint_never_returns_5xx_in_mock_mode(client: TestClient) -> None
     response = client.post("/api/poi", json={"lnglat": "116.404,39.915", "data_mode": "mock"})
     assert response.status_code < 500
     assert response.json()["degraded"] is True
+
+
+# --------------------------------------------------------------------------------------
+# live 检索层的 `market` 召回缺口必须在报告里说出来（README §10.8 / TEST_REPORT §4.4）
+# --------------------------------------------------------------------------------------
+class _StubPoiService:
+    """只换 POI 层的 `data_source`，其余形状与真实报文一致（点位复用 coverage 的辅助器）。"""
+
+    def __init__(self, data_source: str) -> None:
+        self._source = data_source
+
+    async def search(self, center, **_kwargs):
+        from tests.test_coverage import CENTER, group, poi
+
+        return {
+            "center": list(CENTER),
+            "radius_m": 1500,
+            "data_source": self._source,
+            "degraded": False,
+            "groups": [
+                group("medical", [poi("clinic", 200, 0)]),
+                group("shopping", [poi("supermarket", 300, 100)]),
+            ],
+            "usage": {"http_requests": 1, "quota_units": 1, "place_calls": 2, "cache_hits": 0},
+        }
+
+
+@async_test
+async def test_live_report_warns_that_blind_spots_are_biased_up() -> None:
+    """POI 层是 live 时，`notes` 必须明说盲区偏大——读报告的人不该先去翻 README。"""
+    from services.analysis import run_analysis
+
+    report = await run_analysis(
+        [116.404, 39.915],
+        modes=["walking"],
+        minutes=15.0,
+        data_mode="mock",
+        poi_service=_StubPoiService("live"),
+    )
+    joined = " ".join(report["notes"])
+    assert "market" in joined, report["notes"]
+    assert "盲区面积" in joined and "偏大" in joined, report["notes"]
+
+
+@async_test
+async def test_sample_layer_does_not_claim_a_problem_it_does_not_have() -> None:
+    """`mock` / `sample` 层的 `market` 是按画像合成的、有值，挂这条提示就是制造假问题。"""
+    from services.analysis import run_analysis
+
+    report = await run_analysis(
+        [116.404, 39.915],
+        modes=["walking"],
+        minutes=15.0,
+        data_mode="mock",
+        poi_service=_StubPoiService("sample"),
+    )
+    assert not any("盲区面积" in note and "偏大" in note for note in report["notes"]), report[
+        "notes"
+    ]

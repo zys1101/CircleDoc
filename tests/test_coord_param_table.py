@@ -304,3 +304,51 @@ def test_radius_over_10km_is_clamped_not_forwarded() -> None:
     assert params["radius"] == str(PLACE_RADIUS_MAX_M)
     assert params["radius_limit"] == "true"  # 大写 True 会让参数静默失效
     assert params["page_size"] == "10" and params["page_num"] == "1"  # 一律不翻页
+
+
+# --------------------------------------------------------------------------- ③ scope=2
+def test_poi_layer_requests_detail_scope() -> None:
+    """🔴 回归：POI 层必须带 `scope=2`，否则整条分类链路失效。
+
+    `tag` / `classified_poi_tag` / `type` / `distance` **只在 `detail_info` 里**，
+    而 `detail_info` 只在 `scope=2` 时才返回。缺了它不是报错，是**静默给出错误结论**：
+    `normalize_subcat()` 拿不到结构化文本 → 每个 POI 判成 `other` → FR-221 的盲区判定
+    找不到任何市场/药店/小学 → 把配套密集的老城社区报成 95 % 完全盲区。
+
+    实测（2026-10-10，真实 AK，同一入参只差这一个参数）：缺省时 `results[0]` 的键里
+    没有 `detail_info`；`scope=2` 时多出 `detail_info`，含 `tag='医疗;综合医院'`、
+    `type='hospital'`、`distance=1000`。见 `services/poi_categories.py:SCOPE_DETAIL`。
+
+    ⚠️ 这个 bug 只在 live 链路暴露：`SyntheticPoiSamples` 合成的报文**自带
+    `detail_info`**（它按 scope=2 的形状合成），所以 mock 模式下一切正常。
+    """
+    from services.poi_categories import SCOPE_DETAIL
+    from services.poi_search import PoiSearchService
+
+    assert SCOPE_DETAIL == 2
+
+    # ① 客户端确实把这个参数发出去（大写/字符串化都会让它静默失效）
+    recorder = Recorder()
+    client = make_client(recorder)
+    try:
+        run(client.search_place("药店", location=CENTER, radius=1500, scope=SCOPE_DETAIL))
+    finally:
+        run(client.aclose())
+    assert recorder.params_for(ENDPOINTS["place"])["scope"] == "2"
+
+    # ② POI 层的参数镜像必须与调用点逐字段一致（否则缓存键分叉、命中率静默归零）
+    service = PoiSearchService.__new__(PoiSearchService)  # 只借这个纯函数，不建依赖
+    spec = {"query": "药店$综合医院$诊所"}
+    mirrored = PoiSearchService._params_for_place(service, spec, 116.407282, 39.942233, 1500)
+    assert mirrored["scope"] == SCOPE_DETAIL, "POI 层的参数镜像漏了 scope，缓存键会与调用点分叉"
+    assert mirrored["coord_type"] == 3  # 数字 3，不是字符串
+    assert mirrored["radius_limit"] is True
+
+    # ③ 反向：不带 scope 时客户端**不**发这个参数（避免误以为它总有默认值）
+    recorder2 = Recorder()
+    client2 = make_client(recorder2)
+    try:
+        run(client2.search_place("药店", location=CENTER, radius=1500))
+    finally:
+        run(client2.aclose())
+    assert "scope" not in recorder2.params_for(ENDPOINTS["place"])

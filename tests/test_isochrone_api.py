@@ -757,17 +757,30 @@ def test_polyline_bad_input_shapes_match_the_shared_envelope(path: str) -> None:
 
 
 def test_polyline_in_mock_mode_never_touches_the_network() -> None:
-    """示例层的 polyline 也必须 0 出网（演练/离线演示时顶点是可点的）。"""
+    """示例层的 polyline 也必须 0 出网（演练/离线演示时顶点是可点的）。
+
+    ⚠️ 每个请求都**显式带 `data_mode`**。原来第一条请求不带、靠「运行环境里没有 AK
+    所以回落 mock」成立 —— 那让本用例依赖机器状态：开发机按 README 配好 `.env` 之后，
+    那条请求会走去 live 层，`client.direction_calls` 就不再是空的。
+    测试要测的是「mock 层零出网」，就该自己把模式钉死。
+    """
     client = FakeRouteMatrixClient()
     http = make_client(make_service(client))
     response = http.post(
         "/api/isochrone/polyline",
-        json={"lnglat": CENTER, "mode": "walking", "minutes": 15, "bearing": 45, "distance_m": 600},
+        json={
+            "lnglat": CENTER,
+            "mode": "walking",
+            "minutes": 15,
+            "bearing": 45,
+            "distance_m": 600,
+            "data_mode": "mock",
+        },
         headers={},
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["data_source"] in {"live", "sample"}
+    assert body["data_source"] == "sample"
 
     mock = http.post(
         "/api/isochrone/polyline",
@@ -788,7 +801,7 @@ def test_polyline_in_mock_mode_never_touches_the_network() -> None:
     # 🔴 [BUG][M2]：示例层也走同一份出口，且 `usage.polyline_calls` 与同响应 `calls.used`
     # 同源同值——前端计量表只读这一处，不留「两套数各说各话」的分叉。
     assert set(LAZY_USAGE_KEYS) <= set(payload["usage"])
-    # 上面那条不带 `data_mode` 的请求同样落在示例层，所以这里是「会话已用 ≥2」而不是恰好 1
+    # 两条请求**都显式走 mock**，所以这里是「会话已用 ≥2」而不是恰好 1
     assert payload["usage"]["polyline_calls"] == payload["calls"]["used"] >= 2
     assert payload["usage"]["polyline_limit"] == payload["calls"]["limit"] == POLYLINE_CALL_LIMIT
     assert payload["usage"]["polyline_rejected"] == 0

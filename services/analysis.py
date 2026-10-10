@@ -509,6 +509,20 @@ async def run_analysis(
         primary_iso.get("degraded_reason"), poi_result.get("degraded_reason")
     )
     score = build_score_block(coverage, blind_spots, config=score_config)
+
+    # 🔴 live 专属的诚实提示：`market` 在真实检索里召不回（见下），而 FR-221 的盲区主判定
+    #    恰恰依赖 market ∩ pharmacy ∩ primary_school 三类皆无，所以盲区面积会系统性偏大。
+    #    只在 POI 层真的是 live 时说这句话 —— mock 层的 market 是按画像合成的，有值，
+    #    给它挂这条提示等于制造一个不存在的问题。
+    if str(poi_result.get("data_source")) == "live":
+        notes.append(
+            "本次为实时检索：`市场$超市$便利店` 这类词在真实返回里会被「市场监督管理局」"
+            "（政府机构）与「出入口;门」挤占，`page_size=10` 且不翻页（FR-210）时农贸市场"
+            "常常进不了第一页，`market` 因此经常为 0。盲区主判定（FR-221）依赖这一类，"
+            "**本次盲区面积与「完全盲区」计数系统性偏大，只能作相对参考，不能读作"
+            "「这片社区买不到菜」的结论**。依据与已试过的补救见 `docs/TEST_REPORT.md` §4.4。"
+        )
+
     summary = build_summary(
         coverage,
         blind_spots,
