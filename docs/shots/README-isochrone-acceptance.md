@@ -1249,6 +1249,149 @@ chip 的 `background-color` 是 `rgb(255, 255, 255)`、`color` 按档位取色�
 - `pytest tests/test_web_smoke.py --collect-only -q` → **62 例**（README §10.4 / §10.7 与
   `docs/TEST_REPORT.md` §1、§7.1 的这几个数**逐个重测后才写**，没有沿用上一轮）。
 
+## 真实 AK live 复验 · 骑行首跑 + FR-103/108/305 三格（2026-10-11，用户点头后跑）
+
+**为什么单独一轮**：上一轮（「桌面报告版式与评分卡」）整轮零出网，`FR-103` 成功态、`FR-108` 候选列表、
+`FR-305` 的「live 底图能不能截」三格全是打桩或只有代码依据。本轮用户明确点头「你用真实的 AK 测试一下」。
+
+**前置**：服务 `./.venv/Scripts/python.exe -m uvicorn api.app:app --host 127.0.0.1 --port 8000`（pid 22960），
+`.env` 原样不动（`DATA_MODE=auto`、`CACHE_ENABLED=true`、两个 AK 都在）。FR-108 那一跳另起 **8001**
+并只加一个运行时变量 `SUGGEST_ENABLED=true`（后端这道闸门默认 `False`、`.env` 里没写）。
+
+⚠️ **配额与并发纪律**：账号侧并发上限 **3**，本轮**全程串行**，同一时刻只留 1 个真实出网请求在飞，
+8000 与 8001 没有同时打百度。**密钥值没有出现在任何工具调用参数、日志或文件里**——需要它的地方一律
+由后端自己从 `.env` 读。
+
+### 1. 四次请求的响应头（DevTools Network 面板原文）
+
+| # | 请求 | `request_id` | `x-elapsed-ms` | `x-http-requests` | `x-place-calls` | `x-quota-units` | `meta.data_source` |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1 | `POST /api/analysis` 交道口 步行 15 min（桌面、`modes:["walking"]`） | `59446ff3eb704e8b` | 56 | **0** | **0** | **0** | `cache` |
+| 2 | 同参数重发（对照） | `3739454b7f2c4e00` | 25 | 0 | 0 | 0 | `cache` |
+| 3 | `POST /api/analysis` 交道口 **骑行** 15 min | `f86241f1be7c40be` | **14 462** | **14** | **7** | **67** | `live` |
+| 4 | `GET /api/suggest?keyword=和平里&region=北京` | `d043dd017b0f43e0` | 369 | 1 | 1 | 0 | `live` |
+
+**第 1 条是本轮最有用的一条**：它本来要被当成「live 全链路」的证据，但响应头三栏全 0、
+`data_source=cache`——**10-10 那三次 live 写进 `data/cache.db` 的真实 POI 与路线，今天把整条链兜住了**，
+56 ms 出报告、一次都没出网。这正是 §2.20 与「mock 会读本地缓存」那条口径的同一个机制，
+只是这次是在 `data_mode=live` 下看到的。要真出网就得换个没跑过的参数——所以下一条是骑行。
+
+### 2. 骑行 live（把「三轮实跑都是步行单模式」那格填掉）
+
+同一中心点 `116.407282, 39.942233`、同一 15 min：
+
+| 项 | 步行（缓存内那份真实 live 结果） | **骑行（本轮 live 出网）** |
+| --- | ---: | ---: |
+| 墙钟 | 14.6~16.1 s（10-10） | **14.46 s** |
+| 圈内面积 | 1.7057 km² | **6.2298 km²（3.65 倍）** |
+| 顶点数 | 22 | **33** |
+| `sample` 分布 | — | **7 `measured` / 26 `interpolated`**，其中 11 个带 `path_distance_m`（1 665–2 725 m） |
+| `duration_field.sources` | 8 | **7** |
+| 禁行 / 超时格 | 0 / 0 | **0 / 0** |
+| `degraded` | false | **false** |
+
+PRD §2.2 的 ≤25 s 在骑行上同样达标。**上表那三个精确数（33 / 7 / 26）不是从被截断的响应体里数出来的**：
+骑行那份现在已经进本地缓存，重发一次同参数请求（`request_id 7fca8d5460d94ffb`，`x-http-requests: 0`、
+`x-elapsed-ms: 49`）再在页面里 `reduce` 一遍 `vertices[].sample` 才得到——**零出网就能重算，这是本轮的统计口径**。
+🔴 **骑行还把等级换了**：同社区同 15 min，**骑行 72.12 B vs 步行 54.01 D**——面积放大 3.65 倍后同一个
+1 000 m 判定半径够得到更远的设施，盲区随之变小。所以「等级」在双模式下不是稳定结论，读报告必须连着出行方式一起读。
+**FR-206 的第二轮闸门也是这时候第一次在真实数据上被走到**：
+步行结果还在屏上时把出行方式切到骑行，页面先弹「即将跑第二轮：骑行 等时圈」＋骑行/步行共用
+5 000 条/日 的原文，`#quota-meta` 回填第一轮真实计量（`quota_units = 0 ｜ http_requests = 0`——
+第一轮确实整份走缓存，页面没有把它粉饰成出网消耗）、显示本地预算上限 `route_lines=150`，
+点「确认配额可承担，运行第二轮」才发请求。**没有静默出网**。
+
+### 3. FR-103 与 FR-108 的真实一跳
+
+* **FR-103**：`GET /api/regeo?lnglat=116.407282,39.942233` 真实返回，页面渲染出五枚字段徽标
+  （`北京市东城区…`／`东城区`／`adcode 110101`／`取数层：实时调用`）。⚠️ **一次开页烧了 2 次逆地理**：
+  页面加载时先对默认中心点 `116.4074,39.9042` 问一次，选样例后再问一次。这条成本此前文档没写过。
+* **FR-108**：勾「输入联想」＋城市 `北京`＋输入 `和平里`，**一次输入只发一跳**（防抖生效，Network 里
+  只有 1 条 `/api/suggest`）。返回 **10 条候选、`dropped: 0`**，`name` / `lnglat` / `district` /
+  `city` / `province` / `adcode` 全部有值，页面列出「和平里北街-地铁站 116.42505,39.96475」等六条。
+  ✅ **`services/geo._parse_suggest` 假定的返回体字段名对上了**——判据是「键名猜错就不可能有条目活下来」
+  （取不到坐标的条目一律丢弃）。那条 `TODO(需官方核对)` 已从代码注释摘掉，笔记 §2.4 补了实测段。
+  仍未验的是 `flyTo`（需要 live 底图，见第 5 节）。
+
+### 4. 真实数据下的桌面版式（上一轮那两条 CSS 规则的复测）
+
+1280×800，`#report` 内容来自真实数据：
+
+| 量 | 合成基线（上一轮） | **真实数据（本轮）** |
+| --- | ---: | ---: |
+| `#report` 宽 | 1 225 | **1 225** |
+| 雷达 svg | 320×320 | **320×320** |
+| 柱状 svg | 520×260 | **520×260** |
+| `.table-wrap` client / scroll | 1195 / 1195 | **1195 / 1195（不横滚）** |
+| 首个 POI 行高 | 26 | **26** |
+| 表格行数 | 48 | **74** |
+| 页面横向溢出 | −15 | **−15** |
+
+真实数据把表撑到 **74 行**——改前那个 300 px 窄条要横滚 600 px 的正是这张表。**版式结论与数据源无关**，
+上一轮钉的两个上限（320 / 520）在真实数据上没有溢出。
+
+**评分对照**（同一个社区，两种数据源）：真实数据 **54.0 D**（盲区 62.29 %、惩罚 −15.0 分、按权重和
+0.95 归一后字面口径值 65.6、完全盲区 3 块／栅格 250 m／判定半径 1 000 m），`mock` 基线 **98.24 A**
+（盲区 3.53 %）。方向与 §4.4 一致：`market` 在真实检索里恒为 0、合成圈把它补上了。
+`#analysis-notes` 带上了盲区偏大的自动提示，**这是设计上要说实话的那一条而不是回归**；
+但它给「合成数字不能当真实结论」这句话量化了后果——见 README §10.7。
+
+### 5. FR-305「live 底图能不能截」——机制实测，宿主仍未实测
+
+live 底图**没起来**，原因不是配置缺失而是**按约定就该由人填**：`#ak-state` 原文是
+「本地未提供浏览器端 AK ｜ 后端 `has_browser_ak = true` ｜ SVG 降级原因：后端已配置浏览器端 AK，
+但按安全约定不下发前端」。后端两处代码实测确认只回布尔（`infra/config.py:470` 的 `public_dict()`、
+`api/health.py:1204` 的 `browser_ak_type: present_unverifiable`），所以本轮**没有把密钥抄进任何
+工具参数**，这一格开着。
+
+能测的那一半测了——用一个**可控的跨源图源**复现画布污染：在仓库外临时目录放一张 1×1 PNG，
+`python -m http.server 8002` 起了个**无 CORS 头**的跨源宿主（页面 origin 是 `127.0.0.1:8001`），
+在真实 Chrome 里跑：
+
+| 探针 | 结果 |
+| --- | --- |
+| `fetch('http://127.0.0.1:8002/t.png', {mode:'cors'})` | **`TypeError: Failed to fetch`**（无 ACAO） |
+| 同一 URL 的 `mode:'no-cors'` | `opaque ok status=0 type=opaque` —— **宿主可达**，所以上一条不是网络问题 |
+| `new Image()` + `crossOrigin='anonymous'` | **`onerror`**（干净路径走不通） |
+| `new Image()` 直接 `drawImage` 后 `toDataURL()` | 🔴 **`SecurityError: Failed to execute 'toDataURL' on 'HTMLCanvasElement': Tainted canvases may not be exported`** |
+| 同源对照（`data:image/png`） | `ok len=166` —— 不是 `toDataURL` 本身坏了 |
+
+**所以**：「把跨域无 CORS 头的位图画进 canvas 再导出必然抛 `SecurityError`」这句现在是**真实浏览器测量**，
+不再是代码推演。**仍未测的是百度瓦片本身带不带 ACAO**：`api.map.baidu.com/images/logo.png` 一类候选资产
+在本机 `<img>` 直接 `onerror`，分不清 404 与被拦；`fetch(mode:'cors')` 抛 `TypeError` 同样分不清
+「无 CORS 头」与「连不上」。**结论措辞因此是「机制实测 + 宿主未实测」**，等哪天人在 `#browser-ak`
+里手填 AK 开一次 live 底图，把那次 `#map-live` 里的 canvas 直接 `toDataURL()` 一下就结了。
+
+### 6. 🔴 本轮抓出一条新缺陷（未修）：缓存命中时地图栏写「实时调用」
+
+`request_id 59446ff3eb704e8b` 那次：响应头 `x-http-requests: 0 / x-place-calls: 0 / x-quota-units: 0`，
+`meta.data_source = "cache"`，**但同一份响应里 `isochrone.data_source` 仍是 `"live"`、
+`usage.cache_hits` 仍是 `0`**。**同一条在 3 次不同的缓存命中请求上都复现了**（`59446ff3eb704e8b` 步行、
+`3739454b7f2c4e00` 同参数重发、`7fca8d5460d94ffb` 骑行），不是偶发。前端地图栏那一格读的正是 `isochrone.data_source`
+（`web/isochrone.js:727` 的 `["取数层", DATA_SOURCE_LABEL[result.data_source] ...]`），
+于是**报告头写「本地缓存」、地图栏同屏写「实时调用」**，错的是后者。
+
+判据在 `services/isochrone_service.py:856`：`cache` 只在 `http_requests == 0` **且** `cache_hits > 0`
+时才成立——本例 `cache_hits` 没动就落到 `live`。**为什么 6 个批次全部命中 SQLite 却 `cache_hits=0`，
+本轮没有定位**（`isochrone_service.py:212` 只统计 `result.batches[].from_cache`，而这份结果的
+`polyline_calls=0 / oracle_calls=6` 说明它不是从那条计数路径回来的）。登记在 TEST_REPORT §6，
+本轮不修：改子对象继承聚合值会动契约字段语义，前端改读 `meta.data_source` 只动一行但会牵动
+§2.9 那条「提示只认 `live`」的判定，属产品口径。**实操口径：判断有没有出网看响应头
+`x-http-requests`，别看地图栏那一格。**
+
+### 7. 收尾
+
+- 8002 那个临时静态服务与 `Temp/circledoc-xorigin/` 目录**已停已删**（它本来就在仓库外，
+  仓库里没落任何文件）；8001 的 `SUGGEST_ENABLED=true` 实例已停；8000 留着（`.env` 原样，供复看）。
+- `data/cache.db` **确实被本轮写入了骑行的那份真实结果**（这是 live 的正常行为，与 §2.20 那次
+  「mock 不写回缓存」不是同一条路径）。它现在同时含 10-10 的三个样例与本轮的骑行批次——
+  **下次再在这台机器上量「第一次 live」的墙钟，请换参数或显式 `CACHE_ENABLED=false`**，
+  否则会量到 56 ms 那种缓存值。
+- 本轮动的是**文档与一句代码注释**（`services/geo.py` 的 `_parse_suggest` docstring、
+  `docs/BAIDU_API_NOTES.md` §2.4、`README.md`、本文、`docs/TEST_REPORT.md` §4.3 ④ / §6 / §7 的 5d），
+  **没有改任何行为代码**，所以门禁数字仍应是 509 passed / ruff clean / black 49 unchanged——
+  跑一遍确认。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。

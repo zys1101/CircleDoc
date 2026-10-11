@@ -1009,6 +1009,47 @@ $ echo $?
 
 这一步最大的价值不是「跑通了」，而是**离线演示阶段完全看不出来的三个缺陷被真实数据照出来了**。
 
+**④ 2026-10-11 真实 AK 复验：骑行单模式首次 live 出网 + 真实数据下的桌面版式**（用户点头，
+`127.0.0.1:8000`，`.env` 原样：`DATA_MODE=auto`、`CACHE_ENABLED=true`、两个 AK 都在）。
+
+上面 ① 那三轮**都是步行单模式**——上一轮那张表里「双模式预算内」那一列当时只有步行这一半的证据
+（骑行只是按共用额度折算过预算）。现在骑行真的跑过一次 live 了。
+
+| # | 请求 | `request_id` | `x-elapsed-ms` | `x-http-requests` | `x-place-calls` | `x-quota-units` | `meta.data_source` |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1 | `POST /api/analysis` 交道口 **步行** 15 min（**命中本地缓存，零出网**） | `59446ff3eb704e8b` | 56 | **0** | **0** | **0** | `cache` |
+| 2 | 同参数重发一次（对照，仍零出网） | `3739454b7f2c4e00` | 25 | 0 | 0 | 0 | `cache` |
+| 3 | `POST /api/analysis` 交道口 **骑行** 15 min（**首次骑行 live**） | `f86241f1be7c40be` | **14 462** | **14** | **7** | **67** | `live` |
+| 4 | `GET /api/suggest?keyword=和平里&region=北京`（FR-108 真实一跳） | `d043dd017b0f43e0` | 369 | 1 | 1 | 0 | `live` |
+
+* **墙钟**：骑行 live **14.46 s**，与 ① 那三轮（14.6 / 16.1 / 15.2 s）同档，
+  PRD §2.2 的 ≤25 s 在骑行上同样达标。
+* **骑行 vs 步行（同一中心点、同一 15 min）**：圈内面积 **6.2298 km² vs 1.7057 km²（3.65 倍）**、
+  顶点 **33 vs 22**、`duration_field` 的 `sources` **7 vs 8**。33 个顶点里 **7 个 `measured`、26 个
+  `interpolated`**，其中 11 个带 `path_distance_m`（1 665–2 725 m），`blocked_official_cells=0`、
+  `blocked_timeout_cells=0`。**这一条把「live 下的骑行等时圈」从待验清单里划掉了。**
+* 🔴 **骑行把等级换了**：同一社区同一时长，**骑行 72.12 B vs 步行 54.01 D**。原因是圈内面积放大 3.65 倍后
+  同一个 1 000 m 判定半径能覆盖到更远的设施，盲区随之变小——**所以「等级」这个词在双模式下不是稳定结论**，
+  报告里必须连着出行方式一起读（PRD §4.3 的评分口径本来就绑在等时圈上，但这一点此前没有任何真实数据
+  把它量化过）。本轮没为骑行单独取盲区 %，取数与统计口径见下面的复验。
+* **FR-206 的第二轮闸门第一次在真实数据上被走到**：步行结果已在屏上时把出行方式切到骑行，页面弹出
+  「即将跑第二轮：骑行 等时圈」＋骑行/步行共用 5 000 条/日 的原文，`#quota-meta` 回填第一轮的真实计量
+  （`quota_units = 0 ｜ http_requests = 0`——那一轮确实整份走缓存，页面没把它粉饰成出网消耗），
+  并显示本地预算上限 `route_lines=150`；点「确认配额可承担，运行第二轮」才发请求。**没有静默出网**。
+* **真实数据下的桌面版式**（1280×800，§2.20 那两条规则在真实数据上复测）：`#report` **1 225 px** 宽、
+  雷达 **320×320**、柱状 **520×260**、`.table-wrap` `client 1195 / scroll 1195`（**不横滚**）、
+  首个 POI 行高 **26 px**、页面横向溢出 `−15`。与合成数据那次只差在内容量：真实数据给了 **74 行**
+  ——改前那个 300 px 窄条要横滚 600 px 的正是这张表。
+* **真实数据把评分拉开了，方向与 §4.4 的判定一致**：交道口 live/cache 下 **54.0 D**
+  （盲区 62.29 %、惩罚 −15.0 分、已按权重和 0.95 归一，字面口径值 65.6），而 `mock` 基线是 **98.24 A**
+  （3.53 %）。合成圈把 `market` 补上、真实检索拿不到 `market`，一上 live 就从 A 掉到 D——
+  `#blind-summary` 给出「完全盲区 3 块，栅格 250 m、判定半径 1 000 m」，`#analysis-notes` 带上了
+  盲区偏大的自动提示。**这是设计上要说实话的那一条，不是回归**；但它也让 §4.1 的「分数只用于口径演示」
+  有了量化后果，见下面那条 🔴。
+* 🔴 **顺带抓出一条未修缺陷**（登记在 §6）：`meta.data_source=cache` 的同一次请求，响应里
+  `isochrone.data_source` 仍是 `"live"`、`usage.cache_hits` 仍是 `0`，而前端地图栏的「取数层」读的正是
+  `isochrone.data_source`（`web/isochrone.js:727`）——于是**一次 `x-http-requests: 0` 的请求在页面上写成「实时调用」**。
+
 ### 4.4 仍需说明的一处数据层局限：`market` 在三个社区都为 0
 
 live 实测中，**三个社区的圈内 `market` 命中数都是 0**，`pharmacy` / `primary_school` 也各有缺失：
@@ -1112,12 +1153,23 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 | `docker compose up` | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → `/api/health` + `/api/samples` + `POST /api/analysis` 可服务）。**仍未验**：compose 的起停、以及 CI 没挂 `-v` 所以「Linux 宿主 UID 1000 对 `./data` 的写权限」这条在开发机上复现不出来 |
 | ~~🔴 **FR-106 底部抽屉：功能未实现**~~ | ✅ **2026-10-11 已实现并补验**，抽屉自身的两处缺陷见 §2.12，逐条测量见 `docs/shots/README-isochrone-acceptance.md` 的「FR-106 移动端底部抽屉」一节 | 这条 10-11 才登记为「未实现」，同日落地。PRD §6.3 的「两档视口 375×667 / 414×896 无横向滚动、无元素重叠」现在**有可复现的测量记录了**（`scrollWidth / clientWidth` 两档都是 375/375 与 414/414，逐元素热区 ≥ 44 px）。**仍未验**的是真机手感那三项（下一行）——抽屉能拖不等于手指好拖 |
 | ~~**FR-107 只能按视口宽度自动降档，无法手动指定**~~ | ✅ **2026-10-11 已补**：`?profile=m` / `?profile=d` 覆盖 `matchMedia` 探测，报告头徽标按**响应** `meta.lightweight` / `meta.k` 写 | 四例真实浏览器实测 + 三次 curl 直连后端，逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-107 档位显式化」一节。**顺带照出一个口径事实**：两档分数**既可能相同也可能不同**——⚠️ 上一轮这一行写的「交道口 `mobile` 63.03（C）vs `desktop` 67.8（C），差 4.77 分」是**缓存污染**下的两个数（§2.20 末），本轮 `CACHE_ENABLED=false` 重测：交道口 `k=6` **92.1 A**（盲区 0.00 %）vs `k=12` **98.2 A**（3.53 %），差 **6.1** 分；天坛中心点 `k=6` 与 `k=12` **都是 44.6 D**，但盲区是 **98.92 % vs 94.66 %**——**同分而盲区反向移动**，轻量档并不是「少跑几维、结论不变」。所以「轻量档只是省调用、不影响结论」这句**不成立**，徽标里那句「别把两档的分数横向比较」是必需的而不是客套。**换到干净数据后等级也换了**：污染态两档都是 C，干净态两档都是 A |
-| **FR-103 地址行的真实 `live` 一跳** | 零出网下**四例已验**（真实服务端 mock 空态 + 前端缓存去重 + 世代号挡过期响应 + 断网失败态），但**成功态是打桩验的**：把 `window.fetch` 换成返回真实响应形状的桩后量 `data-state="ok"`、五枚字段徽标与 375 宽下的换行 | 后端 `live` 分支不靠这条打桩：`tests/test_geo_api.py` 用**真实 `BaiduClient` + `httpx.MockTransport`** 跑完整解析链（该文件 27 例里 regeo / geocode 占 16 例，含「组件里没给区就不许从文本切出区」的反证）。真实 `live` 的一跳要烧 300 次/日逆地理配额里的 1 次，**按配额纪律等用户点头才跑**；逐条证据与 `request_id` 见 `docs/shots/README-isochrone-acceptance.md` 的「FR-103 中心点地址回显」一节 |
-| 🔴 **FR-108 候选列表的真实 `live` 一跳 + `/place/v2/suggestion` 报文形状** | 零出网下**七例已验**（默认关闭零请求 / 两个本地门槛零请求 / 真实一跳打到本地 `mock` 后端 / 打桩后渲染与点选与键盘 / 前端缓存命中不再发 / 换城市重问 / 世代号丢慢响应 / 移动端抽屉滚动进视口），但**候选列表本身是 `window.fetch` 打桩量的** | 三件没验：① 真实 `live` 一跳要烧「地点输入提示与检索**共用** 100 次/日」池子里的 1 次，等用户点头；② `flyTo` 在无浏览器 AK 的机器上跑不了，只留 `panTo` 退路 + `typeof` 守卫（`tests/test_web_smoke.py` 断言这条退路在）；③ **`_parse_suggest` 的字段名是按 `docs/BAIDU_API_NOTES.md` §2.4 写的，而那一节本身没记返回体形状**——单测用的是自造桩件，真字段名（`name` / `location` / `city` / `district` / `adcode` / `province`）必须等 live 那一跳逐字段核对，核对不上就是「列表永远空」这种安静失败。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-108 地址联想」一节 |
+| ✅ ~~FR-103 地址行的真实 `live` 一跳~~ **2026-10-11 已补验** | 零出网下**四例已验**（真实服务端 mock 空态 + 前端缓存去重 + 世代号挡过期响应 + 断网失败态），当时成功态是打桩验的；**现在成功态有真实一跳了**：交道口中心点由 `GET /api/regeo?lnglat=116.407282,39.942233` 真实返回并渲染成五枚字段徽标（`北京市东城区…`／`东城区`／`前门街道`／`长巷二条乙5号`／`adcode 110101`／`取数层：实时调用`） | ⚠️ **成本比预期高一倍**：页面加载时会对**默认中心点** `116.4074,39.9042` 先问一次 regeo，换样例后再问一次，一次开页烧 **2 次**逆地理（300 次/日 池子）。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-103 中心点地址回显」一节 |
+| ✅ ~~🔴 FR-108 候选列表的真实 `live` 一跳 + `/place/v2/suggestion` 报文形状~~ **2026-10-11 已补验** | 零出网下那**七例**继续有效（默认关闭零请求 / 两个本地门槛零请求 / 真实一跳打到本地 `mock` 后端 / 打桩后渲染与点选与键盘 / 前端缓存命中不再发 / 换城市重问 / 世代号丢慢响应 / 移动端抽屉滚动进视口）；**候选列表本身现在是真实返回**：`request_id d043dd017b0f43e0`、`x-http-requests: 1`、`x-place-calls: 1`、`x-elapsed-ms: 369`，**10 条候选、`dropped: 0`**，`name` / `lnglat` / `district` / `city` / `province` / `adcode` 全有值 | 三件里两件结了：① 真实一跳已跑（要开 `SUGGEST_ENABLED=true` 起服务，**默认关着**，见 §7）；③ **`_parse_suggest` 的字段名核对上了**——判据是「键名猜错就不可能有条目活下来」，这条 TODO 已从代码注释里摘掉，笔记 §2.4 补了实测段。**仍未验的是 ② `flyTo`**：无浏览器端 AK 的机器上实时底图起不来，只留 `panTo` 退路 + `typeof` 守卫（`tests/test_web_smoke.py` 断言这条退路在）。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-108 地址联想」一节 |
 | 移动端**真机**行为 | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
+| 🔴 **新发现，未修**：缓存命中时地图栏把「取数层」写成**实时调用** | 2026-10-11 真实 AK 复验抓到：同一次 `POST /api/analysis`（`request_id 59446ff3eb704e8b`）响应头 `x-http-requests: 0 / x-place-calls: 0 / x-quota-units: 0`、`meta.data_source=cache`，但 `isochrone.data_source` 仍是 `"live"`、`usage.cache_hits` 仍是 `0`；前端地图栏那一格读的是 `isochrone.data_source`（`web/isochrone.js:727`） | **在 3 次不同的缓存命中请求上都复现**（`59446ff3eb704e8b` 步行、`3739454b7f2c4e00` 重发、`7fca8d5460d94ffb` 骑行），不是偶发。报告头写「本地缓存」、地图栏同屏写「实时调用」，**同一页两个取数层互相打脸**，而 0 出网那一个是错的。判据在 `services/isochrone_service.py:856`：`cache` 只在 `http_requests == 0` **且** `cache_hits > 0` 时才成立——本例 `cache_hits` 没动，于是落到 `live`。**两层未解**：① 为什么 6 个批次全部命中 SQLite 却 `cache_hits=0`（`isochrone_service.py:212` 只统计 `result.batches[].from_cache`，而 `polyline_calls=0 / oracle_calls=6` 说明这份结果不是从那条计数路径回来的，**尚未定位**）；② 报告侧的 `data_source` 是 `_overall_source([...])` 聚合（`services/analysis.py:549`），所以它对 `cache` 的判定与 isochrone 子对象各说各话。修法要么让子对象继承聚合值，要么前端改读 `meta.data_source`——**后者只动一行但会牵动 §2.9 那条「提示只认 live」的判定**，属产品口径，本轮没动。它同时是 §2.20 末那条「67.8 是怎么被当成 live 结果读出来的」的放大器。**实操口径：判断有没有出网看响应头 `x-http-requests`** |
 | 浏览器内真实渲染（**两条通道，别混**） | Node + 最小 DOM 打桩没有 CSSOM 与 canvas；真实 Chrome（chrome-devtools MCP）有 | 打桩那条跑两条绘制路径（`tools/report_dom_smoke.mjs` **21 项** + `tools/map_layers_smoke.mjs` **12 项**，`grep -c 'OK '` 与脚本里 `^check(` 的条数**对账**，见 §2.18），只验「节点建对了」。**像素与字节那一半只有真实浏览器能给**：FR-305 的 PNG 尺寸 / 大小 / `drawImage` 与 `fillText` 内容、以及 §2.19 那条提示覆盖缺陷，都是 chrome-devtools 量的。历史：早期写的「无头 Chrome 无输出」是 browser-use 通道的限制，不影响 chrome-devtools |
 | 前端截图（**能拍、但不入库**） | 2026-10-10 起 chrome-devtools 通道能截图（实时底图与橙色真实路网线已现场目视确认） | **仍不提供 PNG**：截图必然含百度瓦片与版权条，把第三方地图影像固化进开源仓库是另一回事；本文件继续以 DOM 计数、network、状态行/tooltip 原文作证据。⚠️ 别和 **FR-305 的报告卡 PNG** 混成一件事：那是**用户在自己浏览器里点出来的运行时导出物**，由我方矢量内容合成、不含任何瓦片，也**不提交进仓库**（验收时只在内存里量字节数与尺寸，跑完即弃） |
-| ✅ ~~FR-305 的报告图片（PNG）导出未实现~~ **2026-10-11 已落地**；🔴 但**「live 底图能不能截」仍未实测** | 现在有**四条**出口：`exportJson` / `exportCsv` / `exportBlindCsv` / **`exportPng`**（`web/report.js`）。已实测的一半：卡片由**页面里那两张 SVG 的克隆**合成，`mock` 零出网下真实 Chrome 量得 `1 800 × 2 584 px`、`image/png`、**670 295 字节**（页面提示同一数写作「约 655 KB」），**真实按钮路径**从点 `#export-png` 到 `<a download>` 被点 **89 ms**，`drawImage` 收到 **2** 个 `IMG`（本征 `640×640` / `1688×844`）、`fillText` **19** 行里含 `GS(2025)4125` 与「不得二次分发」；**同一份**报告连跑 4 次字节数完全一致（`670 295` × 4），换一份报告就换数——所以字节数不是回归哨兵。🔴 **真实落盘这一条仍未验**：本轮把 `<a download>` 拦下来量的 blob，文件没真写进下载目录。没实测的还是那半句：JSAPI 把瓦片画在自己的跨域 `<canvas>` 里、无 CORS 头，`toDataURL()` 按规范应抛 `SecurityError`——**这条只有代码依据**，要验得开一次 live 底图，烧 JSAPI 浏览器端配额，按纪律等点头 | 口径没变：**做「矢量报告卡 + 版权/审图号文字带」，不承诺拍到在线瓦片**（条款 6.6 要的是导出品里**保留标识**，不是导出品**必须是那张底图**）。标识直接 `querySelector` 读页脚，**读不到就拒绝出图**（实测抽掉 `.foot-legal` → 零次下载 + 提示给出原因）。`静态图` API 作为备选同样返回跨域位图，绕不开这个判定。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-305 报告卡 PNG」一节 |
+| ✅ ~~FR-305 的报告图片（PNG）导出未实现~~ **2026-10-11 已落地**；🔴 但**「live 底图能不能截」仍未实测** | 现在有**四条**出口：`exportJson` / `exportCsv` / `exportBlindCsv` / **`exportPng`**（`web/report.js`）。已实测的一半：卡片由**页面里那两张 SVG 的克隆**合成，`mock` 零出网下真实 Chrome 量得 `1 800 × 2 584 px`、`image/png`、**670 295 字节**（页面提示同一数写作「约 655 KB」），**真实按钮路径**从点 `#export-png` 到 `<a download>` 被点 **89 ms**，`drawImage` 收到 **2** 个 `IMG`（本征 `640×640` / `1688×844`）、`fillText` **19** 行里含 `GS(2025)4125` 与「不得二次分发」；**同一份**报告连跑 4 次字节数完全一致（`670 295` × 4），换一份报告就换数——所以字节数不是回归哨兵。🔴 **真实落盘这一条仍未验**：本轮把 `<a download>` 拦下来量的 blob，文件没真写进下载目录。没实测的还是那半句：JSAPI 把瓦片画在自己的跨域 `<canvas>` 里、无 CORS 头，`toDataURL()` 按规范应抛 `SecurityError`——**这条 2026-10-11 有了真实浏览器测量，但只测到机制那一半**：在 `http://127.0.0.1:8001` 的页面里
+拿一个**跨源且无 CORS 头**的位图（本机另起 `127.0.0.1:8002` 静态服务，只放一张 1×1 PNG）画进 canvas
+再 `toDataURL()` → 实测抛 **`SecurityError: Failed to execute 'toDataURL' on 'HTMLCanvasElement': Tainted canvases may not be exported`**；
+同一张图带 `crossOrigin="anonymous"` 加载直接 `onerror`（证明无 ACAO 头时连干净路径都走不通）；
+同源对照（`data:` URL）`toDataURL` 正常返回 166 字节。**没测到的那一半**是百度瓦片本身到底带不带 ACAO：
+`api.map.baidu.com/images/logo.png` 一类候选资产在本机 `<img>` 直接 `onerror`（404 或被拦，分不清），
+而浏览器侧的 `fetch(mode:'cors')` 抛 `TypeError` 也无法区分「无 CORS 头」和「连不上」——
+**所以「JSAPI 瓦片必然污染画布」这句现在是机制实测 + 宿主未实测的组合，不是完整证明**。
+真要实测得开一次 live 底图，而那需要**人手工把浏览器端 AK 填进 `#browser-ak`**（后端按约定只回
+`has_browser_ak` 布尔、密钥值永不下发，`infra/config.py:470` / `api/health.py:1204` 实测确认），
+本轮没有把密钥抄进任何工具调用参数，**这一格仍然开着**。 口径没变：**做「矢量报告卡 + 版权/审图号文字带」，不承诺拍到在线瓦片**（条款 6.6 要的是导出品里**保留标识**，不是导出品**必须是那张底图**）。标识直接 `querySelector` 读页脚，**读不到就拒绝出图**（实测抽掉 `.foot-legal` → 零次下载 + 提示给出原因）。`静态图` API 作为备选同样返回跨域位图，绕不开这个判定。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-305 报告卡 PNG」一节 |
 | 🔴 **页脚审图号字符串没有可自动核对的来源** | `GS(2025)4125` / `甲测资字11111342` 是 2026-10-11 从 `lbsyun.baidu.com` 首页页脚的文本节点**实读**的（不是记忆），TTL 那三个数字有 `test_compliance_footer_ttl_matches_config` 对着 `Settings.model_fields` 默认值守着，**审图号没有对应的机器可读真值** | 自动化只能验「这一行在不在」，验不了「这一行还是不是官方那个号」。页脚因此带**读取日期**，并把**季度人工复核**登记为唯一兜底（README §10.7 / §9.7） |
 
 ---
@@ -1168,6 +1220,16 @@ node tools/map_layers_smoke.mjs _map_input.json
 #       [blob.type, blob.size, img.width + 'x' + img.height];   // 期望 image/png、1800x2584；字节数**只同一份报告可复现**（本轮 668 709 / 670 295 都是真值，别拿其中一个当期望值）
 #     2026-10-11 实测：同一份报告连导三次字节数一致；换一次体检（卡片里的 generated_at /
 #     request_id 变了）会是 670 130，两个数都是真的。
+
+# 5d) live 复验（**会真的出网、真的烧配额**，2026-10-11 跑过，逐条数字见 §4.3 ④）
+#     ⚠️ 三条前置：① 只在用户点头后跑；② 同一时刻只留一个真实请求在飞（账号并发上限 3）；
+#        ③ 想复现「第一次 live」而不是命中缓存，得换没跑过的参数（本轮用的是**骑行**）或先 `CACHE_ENABLED=false`。
+#     直接照 5c 那条命令起服务即可（.env 原样，DATA_MODE=auto 会自动走 live）。
+#     FR-108 那一跳另需运行时打开闸门——后端 `suggest_enabled` 默认 False，.env 里也没写：
+#       SUGGEST_ENABLED=true python -m uvicorn api.app:app --host 127.0.0.1 --port 8001
+#     然后在页面勾「输入联想」+ 填城市 + 输入 ≥3 字，一次输入只发一跳（防抖实测生效）。
+#     实时底图那一格**没法用命令复现**：后端只回 `has_browser_ak` 布尔，密钥值按约定不下发前端，
+#     必须人在 `#browser-ak` 里手填浏览器端 AK（本轮没有把密钥抄进任何工具调用参数）。
 
 # 6) 静态检查
 ruff check . && black --check .

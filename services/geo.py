@@ -790,10 +790,10 @@ class GeoService:
     def _parse_suggest(self, payload: Mapping[str, Any]) -> _Parsed:
         """候选项解析。
 
-        TODO(需官方核对)：笔记 §2.4 只核验了**入参**（`query` / `region` / `city_limit` /
-        `output`），**没有记录返回体字段名**。这里按「`result` 是数组、每项含 `name` 与
-        `location{lng,lat}`」做防御式解析，取不到坐标的条目直接丢弃，不猜 `nameTag` /
-        `type` 之类的字段是否存在；正式对接前需照笔记 §9.2-⑨ 从控制台「示例代码」核对。
+        ✅ 返回体字段名已于 **2026-10-11 用真实服务端 AK 实测核对**（笔记 §2.4，`request_id`
+        `d043dd017b0f43e0`）：`result` 是数组，每项含 `name` 与 `location{lng,lat}`，
+        `district` / `city` / `province` / `adcode` 也确有值。取不到坐标的条目直接丢弃，
+        不猜 `nameTag` / `type` 之类的字段是否存在。
         """
         raw = payload.get("result")
         items: list[dict[str, Any]] = []
