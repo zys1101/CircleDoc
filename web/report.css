@@ -44,6 +44,31 @@
   color: #8250df;
 }
 
+/* FR-107 档位标记：简化档必须「显著」，所以给颜色而不是只加一个字。
+   完整档刻意用弱视觉（灰）——它是默认态，标出来只为让「两档分数不一样」这件事可解释。 */
+.profile-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.profile-badge[data-profile="mobile"] {
+  color: #a9640a;
+  background: rgba(169, 100, 10, 0.08);
+}
+
+.profile-badge[data-profile="desktop"] {
+  color: var(--muted, #6b7280);
+}
+
+.profile-badge[hidden] {
+  display: none;
+}
+
 /* --- 评分卡 ----------------------------------------------------------------------------- */
 .score-card {
   display: flex;

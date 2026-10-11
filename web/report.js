@@ -97,6 +97,7 @@
     el.samples = document.getElementById("sample-select");
     el.sampleNote = document.getElementById("sample-note");
     el.badge = document.getElementById("source-badge");
+    el.profileBadge = document.getElementById("profile-badge");
     el.scoreCard = document.getElementById("score-card");
     el.summary = document.getElementById("summary-list");
     el.radar = document.getElementById("radar-chart");
@@ -402,6 +403,33 @@
     el.badge.title = meta.degraded_reason
       ? `降级原因：${meta.degraded_reason}`
       : "本次为实时调用结果";
+    renderProfileBadge(meta);
+  }
+
+  /**
+   * FR-107 的「显著标注简化模式」——档位标记必须来自**响应** `meta.lightweight`，不是前端自己算的那一份。
+   *
+   * 读 `meta` 而不是读 `payloadForRun().platform`：这两者在缓存命中时本来就该一致，
+   * 但「报告是按哪一档算的」只有后端知道。前端把意图写进请求、再把后端确认的档位显示出来，
+   * 才是对账；自己显示自己的那份，等于把「我以为我跑了简化档」当成证据。
+   */
+  function renderProfileBadge(meta) {
+    const badge = el.profileBadge;
+    if (!badge) return;
+    const k = meta.k;
+    if (meta.lightweight) {
+      badge.textContent = `简化模式（FR-107${Number.isFinite(k) ? ` · 实测前 K=${k}` : ""}）`;
+      badge.dataset.profile = "mobile";
+      badge.title =
+        "已按移动端轻量档计算：只跑 12 方向粗扫、跳过中点加密、关闭耗时热力场，POI 实测前 K 由 12 降到 6。" +
+        "结论可与完整档差一个量级，别把两档的分数横向比较。";
+      badge.hidden = false;
+      return;
+    }
+    badge.textContent = `完整模式${Number.isFinite(k) ? ` · 实测前 K=${k}` : ""}`;
+    badge.dataset.profile = "desktop";
+    badge.title = "按完整档（桌面）计算：全 12 方向 + 中点加密 + 耗时热力场，前 K=12。";
+    badge.hidden = false;
   }
 
   function renderScore(report) {
@@ -932,6 +960,30 @@
     return null;
   }
 
+  /**
+   * FR-107 的档位判定：URL 上的 `?profile=` **优先于**视口宽度。
+   *
+   * PRD 的判据写的是「小屏**或** `?profile=m`」，只看 `matchMedia` 等于只实现了一半：
+   * 桌面评审想在同一块屏上对比完整档与简化档两份报告，只能缩窗口或开 DevTools 模拟，
+   * 而「简化档到底长什么样」恰恰是评审最该直接看到的东西。
+   *
+   * 只认 `m`/`mobile` 与 `d`/`desktop`，其余值**一律忽略并回落到视口判定**：URL 打错字不该让整次
+   * 体检 400，而面板上的档位标记读的是响应 `meta.lightweight`，不会把一个回落说成强制。
+   * `d` 这一侧同样有用——小屏演示时用它顶住完整档，免得被人问「为什么你这份分数不一样」。
+   */
+  function resolvePlatform() {
+    let forced = "";
+    try {
+      forced = (new URLSearchParams(window.location.search).get("profile") || "").trim().toLowerCase();
+    } catch (error) {
+      // URLSearchParams 在极老的引擎上缺失：回落到视口判定即可，档位不是安全边界。
+      forced = "";
+    }
+    if (forced === "m" || forced === "mobile") return "mobile";
+    if (forced === "d" || forced === "desktop") return "desktop";
+    return window.matchMedia && window.matchMedia("(max-width: 768px)").matches ? "mobile" : "desktop";
+  }
+
   function payloadForRun() {
     const map = window.CircleDocMap;
     const controls = map && map.readControls ? map.readControls() : {};
@@ -939,7 +991,7 @@
     const body = {
       minutes: controls.minutes || 15,
       modes: [controls.mode || "walking"],
-      platform: window.matchMedia && window.matchMedia("(max-width: 768px)").matches ? "mobile" : "desktop",
+      platform: resolvePlatform(),
     };
     // 选了预置样例就传 sample_id：后端据此套用该社区的建成形态画像（FR-102 / FR-412）。
     // 只有「样例中心点 == 地图当前中心点」时才传，否则会把样例画像套到用户自选的点上。

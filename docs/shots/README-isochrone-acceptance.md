@@ -398,6 +398,104 @@
    不提供 PNG；且上面的几何都是**落定后**复测的，过渡中间帧没有逐帧采样。
 4. `prefers-reduced-motion: reduce` 下的关闭过渡只在 CSS 里写了规则，**没在模拟里切换该偏好实测**。
 
+## FR-107 档位显式化 · `?profile=m\|d` 四例实测（2026-10-11，实现人自验，零出网）
+
+FR-107 的后端两档（`desktop` K=12 / `mobile` K=6 + 跳过高成本推算）早就在，缺的是前端这半边：
+档位**只能**由 `matchMedia("(max-width: 768px)")` 决定，评审无法在桌面上复现轻量档，用户也无从
+看出自己拿到的是哪一档。本轮补 `?profile=m` / `?profile=d` 覆盖，并把档位写成报告头一枚按
+**响应** `meta` 说话的徽标。
+
+### 0. 前提与零出网自证
+
+服务起在 `127.0.0.1:8796`，`GET /api/health` 回：
+
+```
+server_ak_type: not_configured   browser_ak_type: not_configured
+data_mode: mock                  data_source: sample   data_mode_source: no_server_ak
+```
+
+也就是这台进程**没有 AK 可用**，出不了网——这不是「我叮嘱自己别出网」。四条浏览器用例的
+`body.usage` 全 0，curl 那三条的响应头是 `x-http-requests: 0` / `x-place-calls: 0` / `x-quota-units: 0`。
+留痕 `x-request-id`：浏览器对照例 `67ca281f75cf4af0`，curl `f27f8945bff7452c` / `bd00c4063e6a43e8` / `b8611fe920634172`。
+
+### 1. 四例（DevTools 模拟视口；档位来源同时从「前端要发的请求体」和「真请求的 body」两处取证）
+
+| # | 视口 | URL | 请求体 `platform` | 响应 `meta` | 徽标（`#profile-badge`） |
+| --- | --- | --- | --- | --- | --- |
+| A | 1280×800（`innerWidth=1280`，`body[data-sheet-mode="desktop"]`） | `?profile=m` | **`mobile`** | `lightweight=true`、`k=6` | 「简化模式（FR-107 · 实测前 K=6）」，`data-profile=mobile`，计算色 `rgb(169, 100, 10)` |
+| B | 375×667（`isMobile,touch`，`data-sheet-mode="mobile"`） | `?profile=d` | **`desktop`** | `lightweight=false`、`k=12` | 「完整模式 · 实测前 K=12」，`rgb(107, 114, 128)` |
+| C | 375×667 | `?profile=x`（非法值） | `mobile`（回落视口探测） | `k=6` | 「简化模式（FR-107 · 实测前 K=6）」，**console 0 条消息**、不抛错 |
+| D（对照） | 1280×800 | 无 `profile` 参数 | `desktop` | `lightweight=false`、`k=12` | 「完整模式 · 实测前 K=12」 |
+
+- A 证明「桌面也能手动进轻量档」，且抽屉那套 `data-sheet-mode` 完全没被牵连（仍是 `desktop`）。
+- B 证明「手机也能手动要完整档」，同时 FR-106 的自动上浮照常：跑完 `body[data-sheet-open]="report"`，
+  `#report` `175 → 615`（高 440 px）——和 FR-106 那节量的是同一组数。
+- D 是必须有的对照组：没有 C/D 两例，就无法区分「URL 生效」和「URL 被忽略、一切照旧」。
+
+网络层原文（对照例 D，`x-request-id: 67ca281f75cf4af0`）：
+
+```
+请求体  {"minutes":15,"modes":["walking"],"platform":"desktop","lnglat":"116.4074,39.9042"}
+响应头  x-http-requests: 0   x-place-calls: 0   x-quota-units: 0   x-elapsed-ms: 20
+响应 meta.platform="desktop"  lightweight=false  k=12  data_mode="mock"  data_source="sample"
+```
+
+### 2. 后端那半边绕开浏览器直接 curl 复核
+
+`POST /api/analysis`（`sample_id=beijing-jiaodaokou`，`minutes=15`）：
+
+| `platform` 入参 | HTTP | `meta.platform` | `lightweight` | `k` | `score.total` | grade | `x-request-id` |
+| --- | ---: | --- | --- | ---: | ---: | --- | --- |
+| `mobile` | 200 | `mobile` | `true` | 6 | **63.03** | C | `f27f8945bff7452c` |
+| `desktop` | 200 | `desktop` | `false` | 12 | **67.8** | C | `bd00c4063e6a43e8` |
+| `tablet` | 400 | — | — | — | — | — | `b8611fe920634172` |
+
+`tablet` 的错误信封是 `code=invalid_poi_param`，`detail.allowed=["desktop","mobile"]`。
+
+⚠️ **URL 与请求体是两套口径，这是设计不是疏漏**：`?profile=tablet` 在**前端**静默回落到视口探测，
+`platform:"tablet"` 进 **API** 是硬 400。地址栏是用户手敲的，把一串错字符变成一屏红字太吓人；
+编程调用则越早炸越好。两条路径都各测了一次，别拿其中一条去推另一条。
+
+### 3. 顺手量出来的一个反直觉事实：两档**有时同分、有时差 4.77 分**
+
+| 中心点 | `k=6` | `k=12` | 差 |
+| --- | ---: | ---: | ---: |
+| 天坛 `116.4074,39.9042`（浏览器默认） | 44.65（D） | 44.65（D） | **0** |
+| 交道口样例 `beijing-jiaodaokou` | 63.03（C） | 67.8（C） | **4.77** |
+
+所以「轻量档只是省调用、不影响结论」这句话**不成立**，不能写进任何面向评审的材料。徽标 title 里
+那句「别把两档的分数横向比较」是有实测依据的，不是客套。
+两例的 `score.weight_sum` 都是 **0.95**，与收窄勾选无关、与档位无关——和 FR-106 那节 §5 的结论一致
+（样例本身有一个维度取不到候选，不是子集归一的 bug）。
+
+### 4. 本轮**没有**验的（别当成已验）
+
+1. **两档分差的分布**：只有两个中心点，一个差 0、一个差 4.77，凑不出期望，连「通常差多少」都说不了。
+2. **`k=6` 到底省了多少调用**：PRD FR-107 的验收线是 `http_requests ≤ 5`、`quota_units ≤ 40`、
+   `place_calls ≤ 8`、耗时 ≤ 20 s，而 mock/sample 层三栏计量恒为 **0**，本环境**量不出「省了多少」**，
+   只能证明「没超标」这条在合成层平凡成立。真正的对照要在 `live` 下跑两档各一次，而那要烧真实配额。
+3. **`cache` / `live` 两态下的徽标与降级横幅共存**：只验了 `sample`（`degraded=true`、`degraded_reason=mock_mode`）。
+4. 用户自己在浏览器菜单里设缩放（非 DevTools 设备模拟）时 `matchMedia` 的结果——未测。
+5. 徽标的**键盘可达性 / 朗读**：它是一枚纯展示 `<span>`，没加 `role` 或 `aria-label`，屏幕阅读器怎么念未验。
+
+### 5. 顺带发现的一条桌面布局缺陷（本轮**未修**，只登记）
+
+为了量徽标的位置才发现：1280×800 下 `.layout` 是三列（`300px 540.8px 360px`），而 `#report` 是
+第 4 个自动放置的栅格子项，掉到**第 2 行第 1 列**，宽度被 `minmax(260px, 300px)` 钉在 300 px。实测后果：
+
+| 量的东西 | 实测 | 本该 |
+| --- | ---: | ---: |
+| `.table-wrap` `clientWidth / scrollWidth` | 270 / **600** | 桌面机上九列 POI 表不该横向滚动 |
+| 首个数据行高度 | **79 px** | 单元格逐列折行 |
+| `#report` 高度 / 整页高度 | **7341 px / 12552 px** | 同一行右侧 541 px 的地图列是空的 |
+| 雷达 / 柱状 svg | 280×280 / 280×140 | 柱状图 520×260 的 viewBox 被等比压扁 |
+
+`git show f24a174:web/isochrone.css | grep -c grid-column` 与 `git show 7cee8f8:...` 都是 **0**，
+`git show f24a174:web/isochrone.html` 里 `.layout` 的子项顺序也已经是
+`controls / stage-wrap / readout / report`——**这条从初始提交就在，与 FR-106 / FR-107 无关**。没在本轮修，是因为它不是一行：把 `#report` 撑成全宽之后
+`.chart { width: 100% }` 没有 `max-width`，雷达会涨到 ~600×600，得连 `.chart-box` 一起定口径，
+再重测 1280 / 900（单列堆叠）/ 375（抽屉）三档。登记在 `docs/TEST_REPORT.md` §6 的未修项里。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。
@@ -420,3 +518,6 @@
   （用空 AK 环境变量压住真实 AK 起的那个）停止后 `netstat -ano | grep 8795` **无输出**；
   chrome-devtools 的设备模拟从 `375x667x2,mobile,touch` 复位回 `1280x800x1`；
   冒烟用的临时响应 `_map_input.json` 已删除（按 `docs/TEST_REPORT.md` §7 第 5b 步随时可再生，不入库）。
+- FR-107 那一轮（2026-10-11，同日）起的 `uvicorn api.app:app --port 8796`（同样用空 AK 环境变量压住真实 AK）
+  已停止，`netstat -ano | grep -E ":879[0-9] " | grep -c LISTENING` 实测 **0**；本轮为跑 `map_layers_smoke`
+  再生过一次 `_map_input.json`，验完已删；设备模拟复位在 `1280x800x1`。

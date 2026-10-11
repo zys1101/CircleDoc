@@ -576,3 +576,45 @@ def test_report_opens_the_panel_it_just_filled() -> None:
     assert "isSheetMobile: () => isSheetMobile()," in code
     # Escape 收起与 `aria-expanded` 同步都靠 openSheet("") 这一条路径。
     assert "aria-expanded" in code and 'openSheet("")' in code
+
+
+# --------------------------------------------------------------------------------------
+# FR-107 轻量档：`?profile=` 显式覆盖 + 报告上的「简化模式」标注
+# --------------------------------------------------------------------------------------
+def test_profile_url_overrides_the_viewport_probe() -> None:
+    """PRD 的判据是「小屏**或** `?profile=m`」，只看 `matchMedia` 等于只实现了一半。
+
+    钉三件事：① 档位判定收在一个函数里（`payloadForRun` 不许自己再判一次，否则两处会分叉）；
+    ② `m` / `d` 两种短写法都认；③ 认不出的值回落到视口判定而不是抛错 ——
+    URL 打错字不该让整次体检 400。
+    """
+    code = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    assert "function resolvePlatform()" in code
+    assert "platform: resolvePlatform()," in code
+    # 只有一个地方读那个 768：整个文件里 matchMedia 只许出现一次。
+    assert code.count('matchMedia("(max-width: 768px)")') == 1, "档位判定被写成了两处"
+    assert 'get("profile")' in code
+    assert 'forced === "m" || forced === "mobile"' in code
+    assert 'forced === "d" || forced === "desktop"' in code
+    body = code.split("function resolvePlatform()")[1].split("\n  function ")[0]
+    assert "throw" not in body
+
+
+def test_lightweight_mode_is_marked_from_the_response_meta() -> None:
+    """「报告显著标注简化模式」要读**响应**的 `meta.lightweight`，不是前端自己那份意图。
+
+    抓两类回归：把标记改成前端自算（缓存命中或后端改档时就谎报），以及给徽标写了 `display`
+    却没写 `[hidden]` 兜底 —— `.profile-badge { display: inline-block }` 权重高于 UA 样式表的
+    `[hidden] { display: none }`，少那一条就是「关不掉的徽标」。
+    """
+    report = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    assert "meta.lightweight" in report
+    assert 'el.profileBadge = document.getElementById("profile-badge")' in report
+    assert "简化模式" in report and "完整模式" in report
+    html = ISOCHRONE_HTML.read_text(encoding="utf-8")
+    assert 'class="profile-badge" id="profile-badge"' in html
+    css = strip_css_comments(REPORT_CSS.read_text(encoding="utf-8"))
+    assert '.profile-badge[data-profile="mobile"]' in css
+    mobile = css.split('.profile-badge[data-profile="mobile"] {')[1].split("}")[0]
+    assert "color:" in mobile
+    assert ".profile-badge[hidden] {\n  display: none;\n}" in css
