@@ -214,7 +214,10 @@ def test_category_hint_states_are_styled() -> None:
     """
     css = ISOCHRONE_CSS.read_text(encoding="utf-8")
     js = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
-    states = set(re.findall(r'state = "([a-z]+)"', js))
+    # 🔴 锚到行首：这里要抠的是 `renderCategoryHint()` 里那个局部变量 `state` 的四个分支。
+    # 不锚的话会把 `line.dataset.state = "ok"`（FR-103 地址行）也算进来，
+    # 于是「加一个别的 data-state」会把这条毫无关系的用例判红。
+    states = set(re.findall(r'(?m)^\s*state = "([a-z]+)"', js))
     assert states == {"all", "none", "subset", "hurt"}, states
     for state in sorted(states - {"all"}):
         assert f'#category-hint[data-state="{state}"]' in css, f"缺 #{state} 的样式"
@@ -618,3 +621,95 @@ def test_lightweight_mode_is_marked_from_the_response_meta() -> None:
     mobile = css.split('.profile-badge[data-profile="mobile"] {')[1].split("}")[0]
     assert "color:" in mobile
     assert ".profile-badge[hidden] {\n  display: none;\n}" in css
+
+
+# --------------------------------------------------------------------------------------
+# FR-103 中心点地址回显：接线在 setCenter、字段只取自响应、四个状态都得看得见
+# --------------------------------------------------------------------------------------
+def js_function(code: str, head: str, tail: str) -> str:
+    """按「函数头 → 下一个顶层函数头」切出一个函数体。
+
+    只用字符串切而不上 AST：本文件全部断言都是「前端接线对不对」，
+    读的是源码里的字面约定（`strip_js_comments` 已经把注释正文剥掉，不会误伤）。
+    """
+    assert head in code, f"找不到 {head} —— FR-103 的接线被改名了？"
+    return code.split(head, 1)[1].split(tail, 1)[0]
+
+
+def test_center_address_is_wired_to_the_regeo_route() -> None:
+    """`/api/regeo` 必须在换中心点时真的被问一次。
+
+    抓的是这条链最典型的断法：加了 DOM、加了函数，却没接到 `setCenter()` 上 ——
+    地址行会永远停在「尚未解析」，而控制台一声不响。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    assert 'const REGEO_PATH = "/api/regeo";' in code
+
+    set_center = js_function(code, "function setCenter(lnglat, note_)", "\nfunction ")
+    assert "fetchCenterAddress(value);" in set_center
+    # 🔴 不 await：地址只是回显，再慢再失败都不许拖住等时圈、地图平移与 `renderAll()`。
+    assert "await fetchCenterAddress" not in set_center
+
+    fetch = js_function(code, "async function fetchCenterAddress(lnglat)", "\nfunction ")
+    # 入参口径与 `#center-readout` 一致：经度在前；`data_mode` 必须跟着走，
+    # 否则用户在面板上切了「本地缓存」而地址行还在偷偷打实时。
+    assert "URLSearchParams({ lnglat:" in fetch
+    assert 'params.set("data_mode", el.dataMode.value)' in fetch
+
+
+def test_center_address_keeps_all_three_quota_guards() -> None:
+    """三条守卫各挡一类现场事故，少一条都会在真机上烧配额或坠旧点。
+
+    逆地理是 0.5 QPS / 300 次/日（PRD §4.7 配额表），而「在地图上连着点几个位置」
+    是 FR-103 之后最自然的操作。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    assert 'address: { pending: "", seq: 0, cache: new Map() },' in code
+
+    fetch = js_function(code, "async function fetchCenterAddress(lnglat)", "\nfunction ")
+    assert "state.address.cache.get(key)" in fetch, "① 同坐标重复问：白花的配额"
+    assert "state.address.pending === key" in fetch, "② 同坐标并发问：0.5 QPS 的桶被自己排满"
+    assert "seq !== state.address.seq" in fetch, "③ 过期响应落地：地址停在上一个点上"
+    assert fetch.count("seq !== state.address.seq") == 2, "成功与失败两条路径都要判过期"
+
+
+def test_center_address_never_splits_the_formatted_address() -> None:
+    """地址行的每个字段都取自响应，绝不做文本切分（PRD §4.7 末尾专门禁止）。
+
+    切 `formatted_address` 换个城市就错位，而面板上看不出任何异常；同理空态必须
+    直接铺后端的 `message` ——「这个坐标查不到」是结论，不是错误。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    render = js_function(code, "function renderAddressLine(body)", "\nasync function ")
+    for field in ("body.formatted_address", "body.district", "body.town", "body.adcode"):
+        assert field in render, f"地址行不再读 {field}"
+    assert "body.message" in render and "body.ok !== true" in render
+    assert ".split(" not in render and ".slice(" not in render, "地址字段被切成文本了"
+    assert "toFixed" not in render, "地址行里出现坐标格式化的字符串 = 在编地址"
+
+
+def test_center_address_is_readable_in_every_state() -> None:
+    """四个状态（解析中 / 成功 / 空 / 失败）都得有看得见的文案。
+
+    🔴 状态一律用 `data-state` 而不是 `hidden`：`.address-line { display: flex }` 的作者
+    规则权重高于 UA 样式表的 `[hidden] { display: none }`，靠 `hidden` 藏行会藏不掉；
+    反过来说，把空态整行藏起来也会被读成「这功能压根没跑」。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    assert set(re.findall(r'line\.dataset\.state = "([a-z]+)"', code)) == {
+        "pending",
+        "error",
+        "empty",
+        "ok",
+    }
+
+    html = ISOCHRONE_HTML.read_text(encoding="utf-8")
+    assert 'class="address-line" id="center-address" data-state="none"' in html
+    # 读序：先坐标、后地址，两行是同一件事的两种写法，不能倒过来。
+    assert html.index('id="center-readout"') < html.index('id="center-address"')
+
+    css = ISOCHRONE_CSS.read_text(encoding="utf-8")
+    base = css.split(".address-line {")[1].split("}")[0]
+    assert "display: none" not in base
+    assert '.address-line[data-state="error"]' in css
+    assert ".address-part" in css

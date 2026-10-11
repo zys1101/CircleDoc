@@ -98,6 +98,9 @@
           </label>
           <p class="actions"><button type="button" id="geocode">地址搜索取点</button></p>
           <p class="hint" id="center-readout">中心点：未设定。</p>
+          <!-- FR-103：中心点的结构化地址。内容一律来自 /api/regeo 的响应；取不到就照实写取不到，
+               绝不用坐标反推一个「看着像地址」的字符串。 -->
+          <p class="address-line" id="center-address" data-state="none">中心点地址：尚未解析。</p>
 
           <fieldset class="nested">
             <legend>浏览器端 AK（只存在本机，用于动态注入 JSAPI）</legend>

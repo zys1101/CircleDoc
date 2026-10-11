@@ -496,6 +496,118 @@ data_mode: mock                  data_source: sample   data_mode_source: no_serv
 `.chart { width: 100% }` 没有 `max-width`，雷达会涨到 ~600×600，得连 `.chart-box` 一起定口径，
 再重测 1280 / 900（单列堆叠）/ 375（抽屉）三档。登记在 `docs/TEST_REPORT.md` §6 的未修项里。
 
+## FR-103 中心点地址回显 · 零出网五例实测（2026-10-11，实现人自验，零出网）
+
+FR-103 要的是「面板上不能只有一串坐标」。后端 `/api/regeo` 早就在（README §5 接口表与 §5.1 口径），缺的是**前端这一跳**：
+`web/isochrone.js` 从没调用过它，`setCenter()` 只把 `116.40740, 39.90420（BD09LL）` 写进 `#center-readout`。
+本轮新增 `#center-address` 一行，字段**只取自响应**——PRD §4.7 末尾专门禁止把 `formatted_address`
+切成行政区/街道，这条写成了反证测试（`tests/test_geo_api.py::test_address_parts_never_come_from_splitting_formatted_address`）。
+取不到就照实说取不到：空态与失败态都**不阻断**等时圈与地图平移。
+
+> 计数口径：README §10.7 与 `docs/TEST_REPORT.md` §6 把这次实测记作「**四例 + 一条打桩成功态**」，
+> 指的就是下面这张表的 A/B/D/E 与 C——**同一轮实测，不是两次实验**。
+
+### 0. 前提与零出网自证
+
+服务用空 AK 环境变量起在 `127.0.0.1:8801`（`BAIDU_SERVER_AK= BAIDU_BROWSER_AK= uvicorn api.app:app`），
+`GET /api/health` 回 `server_ak_type=not_configured`、`data_mode=mock`、`baidu_reachable=False`。
+
+绕开浏览器先 curl 一次，拿到空态那条文案的**原文**：
+
+```
+GET /api/regeo?lnglat=116.404,39.915&data_mode=mock      → 200
+{ok: false, empty: true, degraded: true, degraded_reason: "mock_mode", data_source: "sample",
+ meta.sample_layer: "unavailable", meta.data_mode: "mock",
+ usage: {place_calls:0, quota_units:0, http_requests:0, attempts:0, cache_hits:0},
+ request_id: "23814f90dfbf4256"}
+"formatted_address" in body  →  False        ← 响应里根本没有这个键
+```
+
+最后一行是这条需求最硬的一条自证：**响应没给的东西，前端不可能「切」出来**——所以浏览器里那句
+地址文案只可能是从 `message` 原样回显的，不是拼出来的。
+
+### 1. 五例（A/B 打真实服务，C/D/E 把 `window.fetch` 换成桩）
+
+| # | 中心点 | 取数方式 | `data-state` | 回显（DOM 实测文本） |
+| --- | --- | --- | --- | --- |
+| A 首屏 | `116.40740,39.90420` | **真实服务**（mock 层） | `empty` | 「中心点地址：当前为离线（mock）模式，不发起实时调用；如需实时数据请配置服务端 AK。 该查询暂无可用的合成示例数据；前端按上面的提示继续流程即可，不算失败。」+ 一枚 chip「取数层：程序合成示例」；`display:flex`、`getClientRects().length>0`、高 108 px；`state.address = {pending:"", seq:1, cache:1}` || B 重复同点 | 同 A | 真实服务 | `empty` | **没发出第二个请求**：`cache.size 1 → 1`、`seq` 仍 **1**、`pending` 复位 `""`；`#run` 未 disabled |
+| C 成功态 | `116.41020,39.91420` | 🔴 `window.fetch` **打桩**（live 形状） | `ok` | `<b>`「中心点地址：北京市东城区交道口街道北总兵胡同3号」，五枚 `.address-part`：`东城区` / `交道口街道` / `北总兵胡同3号` / `110101` / `取数层：实时` |
+| D 世代号 | `116.42000,39.93000`（慢 260 ms）→ `116.43000,39.94000`（快 10 ms） | 打桩 | `ok` | 留在页面上的是**新点**「中心点地址：新的点（快响应，应该留下）东城区东华门街道110101取数层：实时」，慢的那份被丢弃；`seq=4`、`cache.size=4` |
+| E 失败态 | `116.44000,39.95000` | 打桩 `throw TypeError("Failed to fetch")` | `error` | 「中心点地址：没取到（网络错误，请检查连接或稍后重试）。不影响等时圈与体检。」计算色 `rgb(169, 100, 10)`（= `--warn`）；`#run.disabled=false`、降级横幅「当前处于离线模式…」文案仍在 |
+
+A 这一跳的网络层原文（`reqid=7`，浏览器 Network 面板）：
+
+```
+GET http://127.0.0.1:8801/api/regeo?lnglat=116.4074%2C39.9042   [200]
+响应头 content-length:675  x-elapsed-ms:1
+        x-http-requests:0  x-place-calls:0  x-quota-units:0  x-request-id:33437b90d2c548b5
+响应体 {ok:false, service:"regeo", data_source:"sample", coordinate_system:"bd09ll",
+        empty:true, degraded:true, degraded_reason:"mock_mode", usage:{全 0},
+        meta.params:{location:"39.904200,116.407400", coordtype:"bd09ll"}, ...}
+```
+
+- 出站是 **`纬度,经度`**（`location=39.904200,116.407400`），回显给用户的 `lnglat` 是**经度在前** —— 两个顺序
+  各测一次，别拿一个去推另一个（`tests/test_geo_api.py::test_request_sends_lat_first_while_the_response_keeps_lng_first`）。
+- 整个页面这轮只发了 **3 条请求**：`/api/regeo`(7)、`/api/health`(8)、`/api/samples`(9)。
+  `/api/regeo` 只有 1 条，就是 B 例「同点不重复问」的直接证据。
+- 请求 URL 里**没有** `data_mode` 参数：`#data-mode` 未选时前端不带这个键，由服务端运行时解析（与 `/api/geocode` 同口径）。
+
+### 2. 三条配额守卫是量出来的，不是「代码里写了」
+
+逆地理这一路是 **0.5 QPS / 300 次/日**，比等时圈那一路紧得多，所以 `state.address` 上加了三个键：
+
+| 守卫 | 挡的事故 | 本轮实测 |
+| --- | --- | --- |
+| `cache`（键取 **5 位小数**，与回显精度一致） | 同一位置反复取点每次都问一次百度 | B 例 `cache.size 1→1`，Network 里 `/api/regeo` 恒为 1 条 |
+| `pending`（同 key 在飞直接返回） | 连点两次把同一坐标发成两个并发请求、双份占桶 | B 例结束后 `pending` 回到 `""`，没留下卡死的锁 |
+| `seq`（在飞响应的世代号） | 换点时**旧**地址盖到**新**点上——面板说东单、地图在天坛 | D 例慢响应被丢，`seq` 递增到 4 |
+
+⚠️ 这三条在零出网下只能证明「**前端不多问**」，证明不了百度侧计费按预期。真实 `live` 的配额对照本轮没跑（§4 项 1）。
+
+### 3. 几何：375×667 抽屉（FR-106 同口径）与桌面 1280×800
+
+| 量的东西 | 375×667 空态 | 375×667 成功态 | 1280×800 空态 |
+| --- | ---: | ---: | ---: |
+| `#center-address` | **294×108** px | **294×112** px | 249×108 px（所在 `#controls` 列 300 px 宽） |
+| 子节点换行行数 | 1 枚 chip | **4 行**（基线 top = 0 / 25 / 56 / 87） | 2 行 |
+| `display` / `font-size` | `flex` / 12px | 同 | 同 |
+| `documentElement.scrollWidth` | **360** ≤ `innerWidth` 375 | **360** | 1265 ≤ 1280 |
+| 与下一个元素（`fieldset`）的间距 / 重叠 | 10 px / `false` | — | 10 px / `false` |
+| chip 宽度 | 136 px | 91 / 103 / 121 / 97 / 112 px，**全部 ≤ 294** | — |
+
+成功态那 6 个子节点的 `top` 落在 **4 个不同基线**上，这才是 `flex-wrap` 真的在换行、而不是把行撑到溢出的证据；
+只测高度（112 px）分不清这两种情况。移动端抽屉里地址行一开始在可视区外（`#controls` 内容高、面板 `scrollTop≠0`），
+`scrollIntoView` 之后才量到——**不是**被藏起来了（`getClientRects().length>0`、`display:flex`）。
+
+顺带一个观察、本轮**没改**：空态文案是后端原文（`len()` 实测 74 字，含两段提示），在 249 px 宽的列里要占满 108 px 高、
+比坐标那行重得多。要不要截断留到评审看真实 `live` 下的观感再定。
+
+### 4. 本轮**没有**验的（别当成已验）
+
+1. 🔴 **真实 `live` 的一跳**：要烧掉 300 次/日逆地理配额里的 1 次，按配额纪律**等用户点头**。
+   所以**成功态（C 例）与失败态（E 例）都是 `window.fetch` 打桩**，桩的字段清单抄自
+   `services/geo.py::_parse_regeo`，**不是**抓包来的真实响应。后端 live 分支的形状由
+   `tests/test_geo_api.py`（16 例，真实 `BaiduClient` + `httpx.MockTransport`）钉住，但那是合成传输层，不等于线上。
+2. **`data_source="cache"` 时地址行的取数层 chip**：浏览器里没出现过（只跑了 `sample` 空态与打桩 `live`）。
+   服务端命中缓存这条路径由 `tests/test_geo_api.py::test_second_identical_regeo_is_served_from_cache` 覆盖
+   （第二次调用 `http_requests` 不再增长、`usage.cache_hits=1`、`data_source="cache"`）。
+3. **`pending`（解析中）态没被拍到**：本地服务端 1 ms 返回，文案一闪而过没来得及采样；而且它**没有专门的
+   CSS 样式**（只有 base 色，`isochrone.css` 里只给 `error` 着了 `--warn`），所以这一态目前只由
+   `tests/test_web_smoke.py::test_center_address_is_readable_in_every_state` 的四个态断言守着。
+4. **JSAPI 实时底图叠加下的地址行**：本轮在无底图环境（mock、无浏览器 AK）测。
+5. **屏幕阅读器朗读 / 语义**：`#center-address` 是纯展示 `<p>`，没加 `aria-live`，「解析中 → 成功」的变化
+   朗读不出来；未验也未改。
+6. **真实 `live` 下字段完整度**：`town` / `street_number` 在部分地址上会缺失，缺失时的 chip 数量本轮只由
+   「渲染前逐字段过 `if`」这条实现与上面那条反证测试保证，没有真实样本。
+
+### 5. 收尾
+
+- 本轮起的两个本地服务都已停：`uvicorn api.app:app --port 8801`（`pid=18960`，`taskkill` 成功）、
+  以及为复跑 `map_layers_smoke` 而再起的 `--port 8802`。`netstat -ano | grep -c '880[0-9].*LISTENING'` 两次实测都是 **0**。
+- 临时文件全部删除：`.t103-health.json`、`.t103-regeo.json`、`.t103-server.log`、`.t103b.log`、`_map_input.json`、
+  两条 node 冒烟的输出 `.smoke1.txt` / `.smoke2.txt`。`git status --short` 只剩本轮 7 个预期改动文件。
+- chrome-devtools 设备模拟从 `375x667x2,mobile,touch` 复位回 `1280x800x1`。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。
@@ -521,3 +633,7 @@ data_mode: mock                  data_source: sample   data_mode_source: no_serv
 - FR-107 那一轮（2026-10-11，同日）起的 `uvicorn api.app:app --port 8796`（同样用空 AK 环境变量压住真实 AK）
   已停止，`netstat -ano | grep -E ":879[0-9] " | grep -c LISTENING` 实测 **0**；本轮为跑 `map_layers_smoke`
   再生过一次 `_map_input.json`，验完已删；设备模拟复位在 `1280x800x1`。
+- FR-103 那一轮（2026-10-11，同日）起的 `8801`（地址行五例）与 `8802`（复跑 `map_layers_smoke` 用的临时响应）
+  都已 `taskkill`，`netstat -ano | grep -c '880[0-9].*LISTENING'` 两次实测都是 **0**；
+  `.t103-health.json` / `.t103-regeo.json` / `.t103-server.log` / `.t103b.log` / `_map_input.json` /
+  `.smoke1.txt` / `.smoke2.txt` 全部删除，设备模拟复位 `1280x800x1`。逐条见上面「FR-103 中心点地址回显」§5。

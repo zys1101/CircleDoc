@@ -28,6 +28,7 @@
 
 const HEALTH_PATH = "/api/health";
 const GEOCODE_PATH = "/api/geocode";
+const REGEO_PATH = "/api/regeo";
 const ISOCHRONE_PATH = "/api/isochrone";
 const POLYLINE_PATH = "/api/isochrone/polyline";
 
@@ -140,6 +141,7 @@ const el = {
   addr: document.getElementById("addr"),
   city: document.getElementById("city"),
   centerReadout: document.getElementById("center-readout"),
+  centerAddress: document.getElementById("center-address"),
   browserAk: document.getElementById("browser-ak"),
   akState: document.getElementById("ak-state"),
   mode: document.getElementById("mode"),
@@ -267,6 +269,10 @@ const state = {
   health: null,
   effectiveDataMode: "mock",
   center: DEFAULT_CENTER.slice(),
+  // FR-103：中心点的结构化地址。cache 键取 5 位小数（与回显精度一致），同一位置反复取点只问一次；
+  // pending 挡住同一坐标的重复在飞请求；seq 是在飞响应的世代号，连点换点时只认最新那份
+  // —— 和 runSeq / polylineSeq 同一个思路。
+  address: { pending: "", seq: 0, cache: new Map() },
   minutes: 15,
   results: { walking: null, riding: null }, // FR-206：两模式结果都留着，用于叠加对比
   activeMode: "walking",
@@ -2035,7 +2041,7 @@ function straightDistance(lnglat) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 请求：/api/health /api/geocode /api/isochrone /api/isochrone/polyline
+// 请求：/api/health /api/geocode /api/regeo /api/isochrone /api/isochrone/polyline
 // ---------------------------------------------------------------------------------------------
 
 async function readJson(response) {
@@ -2080,6 +2086,78 @@ async function loadHealth() {
     renderModeBadge();
     renderAkState();
   }
+}
+
+/**
+ * FR-103：坐标 → 结构化地址（行政区 / 街道 / 门牌），补掉「面板上只有坐标」这一项。
+ *
+ * 🔴 三条守卫一个都不能省：
+ * ① 同一坐标只问一次 —— 逆地理走 0.5 QPS 的桶，换点连点会把令牌排满；
+ * ② 世代号挡住过期响应，否则「点已经换了，地址行还在坠上一份」；
+ * ③ 失败绝不打断主流程 —— 地址只是回显，等时圈与体检都不依赖它。
+ */
+async function fetchCenterAddress(lnglat) {
+  const line = el.centerAddress;
+  if (!line) return;
+  const key = `${lnglat[0].toFixed(5)},${lnglat[1].toFixed(5)}`;
+  const cached = state.address.cache.get(key);
+  if (cached) {
+    renderAddressLine(cached);
+    return;
+  }
+  if (state.address.pending === key) return; // 同坐标的请求还在飞，不重复占桶
+  state.address.pending = key;
+  const seq = (state.address.seq += 1);
+  line.dataset.state = "pending";
+  line.textContent = `中心点地址：解析中…（${key}）`;
+  try {
+    const params = new URLSearchParams({ lnglat: `${lnglat[0]},${lnglat[1]}` });
+    if (el.dataMode && el.dataMode.value) params.set("data_mode", el.dataMode.value);
+    const response = await fetch(`${REGEO_PATH}?${params.toString()}`);
+    const body = await readJson(response);
+    if (seq !== state.address.seq) return; // 中心点又变了：这份响应已不属于当前视野
+    if (!response.ok) {
+      throw new Error((body && body.error && body.error.message) || `http_${response.status}`);
+    }
+    state.address.cache.set(key, body);
+    renderAddressLine(body);
+  } catch (error) {
+    if (seq !== state.address.seq) return;
+    line.dataset.state = "error";
+    line.textContent = `中心点地址：没取到（${
+      error && error.message ? error.message : String(error)
+    }）。不影响等时圈与体检。`;
+  } finally {
+    if (state.address.pending === key) state.address.pending = "";
+  }
+}
+
+/**
+ * 把 `/api/regeo` 的官方字段摊成一行。
+ *
+ * 空结果按「可读文案」处理而不是报错：后端在 mock / 无 AK 下回 `ok=false` + 一句人话
+ * （合成层不替逆地理造地址），这句话本身就是要显示的内容。
+ */
+function renderAddressLine(body) {
+  const line = el.centerAddress;
+  const source = DATA_SOURCE_LABEL[body.data_source] || body.data_source || "—";
+  const parts = [
+    ["行政区", body.district],
+    ["街道", body.town],
+    ["门牌", [body.street, body.street_number].filter(Boolean).join("")],
+    ["adcode", body.adcode],
+  ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "");
+  clear(line);
+  if (body.ok !== true || (!body.formatted_address && !parts.length)) {
+    line.dataset.state = "empty";
+    line.appendChild(node("b", "", `中心点地址：${String(body.message || "未取到可读地址").trim()}`));
+    line.appendChild(node("span", "address-part", `取数层：${source}`));
+    return;
+  }
+  line.dataset.state = "ok";
+  line.appendChild(node("b", "", `中心点地址：${body.formatted_address}`));
+  parts.forEach(([label, value]) => line.appendChild(node("span", "address-part", `${label} ${value}`)));
+  line.appendChild(node("span", "address-part", `取数层：${source}`));
 }
 
 async function runGeocode() {
@@ -2451,6 +2529,7 @@ function setCenter(lnglat, note_) {
   el.centerReadout.textContent = `中心点：${value[0].toFixed(5)}, ${value[1].toFixed(5)}（BD09LL）｜ ${
     note_ || ""
   }`;
+  fetchCenterAddress(value); // 不 await：地址只是回显，不许拖住等时圈与地图平移
   if (state.jsapi.phase === "live" && state.jsapi.map) {
     try {
       state.jsapi.map.panTo(new state.jsapi.bmap.Point(value[0], value[1]));

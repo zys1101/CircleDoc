@@ -126,6 +126,35 @@ legend {
   color: var(--muted);
 }
 
+/* FR-103 中心点地址回显。状态一律用 `data-state` 表达而不是 `hidden`：
+   空态和失败态都得有可读文案，把整行藏起来只会被读成「这功能没跑」。 */
+.address-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 6px 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.address-line b {
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+
+.address-line[data-state="error"] {
+  color: var(--warn);
+}
+
+.address-part {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink-strong);
+}
+
 input[type="text"],
 select {
   width: 100%;

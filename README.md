@@ -8,7 +8,7 @@
 | 技术栈 | Python 3.11 + FastAPI 后端 · 零构建链原生 HTML/CSS/JS 前端 · SQLite 运行时缓存 · Docker 一键部署 |
 | 地图依赖 | 百度地图开放平台 Web 服务 API + JSAPI 4.0（浏览器端，按需动态注入、可降级） |
 | 事实依据 | 配额、接口路径、参数名、状态码、条款判定**一律以 [`docs/BAIDU_API_NOTES.md`](docs/BAIDU_API_NOTES.md) 为唯一出处**（2026-10-04 逐接口核验官方文档所得）；架构与需求见 [`PRD.md`](PRD.md) |
-| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（461 例单测 + 对比实验 + 诚实登记的未验证项） |
+| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（481 例单测 + 对比实验 + 诚实登记的未验证项） |
 | 部署细节 | [`tools/README-deploy.md`](tools/README-deploy.md)（Dockerfile / compose / run 脚本的设计取舍） |
 | 开源协议 | [Apache License 2.0](LICENSE) |
 | 最后更新 | 2026-10-11 |
@@ -45,6 +45,7 @@
 | --- | --- |
 | 三种方式确定中心点：地图点选 / 地址文本 / 直接输入 `lng,lat` | FR-101 |
 | 3 个预置样例社区，同城三种建成形态（老城 / 新建大盘 / 城中村） | FR-102 |
+| 中心点**结构化地址回显**：行政区 / 街道 / 门牌 / adcode 取自 `/api/regeo` 响应，取不到就照实说取不到 | FR-103 |
 | 参数面板：出行方式、目标时长（5 / 10 / 15 / 30 min）、**设施类别七类多选**（取消盲区三类时前后端各挂一条警示） | FR-104 |
 | 数据模式开关 `live` / `cache` / `mock`，缺省值由启动探测决定而不是硬编码 | FR-105 |
 | 步行 + 骑行双模式等时圈，可叠加对比 | FR-201、FR-206 |
@@ -115,7 +116,7 @@ python -m venv .venv
 ### 2.4 本地校验（零 AK、零出网）
 
 ```bash
-pytest -q                                              # 461 例（实测，零配置 / 零 AK / 零出网）
+pytest -q                                              # 481 例（实测，零配置 / 零 AK / 零出网）
 python -c "from services.poi_categories import assert_wordlist; assert_wordlist()"
 python tools/gen_samples.py --check                     # 合成样例基线校验
 ruff check . && black --check .                         # 零告警
@@ -308,6 +309,16 @@ node tools/map_layers_smoke.mjs _map_input.json         # 地图两个叠加图�
 ### 5.1 几个容易踩的接口口径
 
 - **`/api/regeo` 的坐标系参数名是 `coordtype`**（无下划线、传字符串），而请求里的 `location` 是 **`纬度,经度`**，本接口的入参 `lnglat` 却是 **`经度,纬度`**。换算只在 `services/geo.py` 做一次（详见 §6.4）。
+- **`FR-103` 的中心点地址行只读响应字段，不做任何文本推断**。`web/isochrone.js` 在每次换中心点时
+  GET 一次 `/api/regeo`，把 `formatted_address` 与 `district` / `town` / `street + street_number` /
+  `adcode` 摊成一行，并标出取数层。**绝不切 `formatted_address`**（PRD §4.7 末尾专门禁止：换个城市
+  「省市区街道门牌」的排列就错位，切出来的「街道」可能是区，而面板上看不出任何异常）。
+  🔴 三条守卫都在这条链上，因为逆地理只有 **0.5 QPS / 300 次/日**（笔记 §3.1）而「在地图上连着点几个位置」
+  是最自然的操作：① 同坐标结果进前端缓存（`state.address.cache`，键取 5 位小数）；② 同坐标的并发请求
+  合并（`state.address.pending`）；③ 世代号挡住过期响应（`state.address.seq`），否则地址会停在上一个点。
+  **失败与空态都不打断主流程**：`mock` 或合成层没有逆地理样本时，地址行原样铺后端的 `message`
+  （「当前为离线（mock）模式…该查询暂无可用的合成示例数据」）并标 `data-state="empty"` ——
+  这是**结论**而不是错误，等时圈与体检照常跑。
 - **`/api/poi` 不使用多边形区域检索**——它需商用授权，个人档报 `status=9`（决策 D10）。
 - **`/api/analysis` 的双模式**（`walking` + `riding`）下 POI **只检索一次**，骑行圈复用同一份 POI 集合，`place_calls` 不翻倍。
 - **`categories`（FR-104）三条口径**：全选七类时前端**不发这个键**（发了就等于给同一中心点换一把缓存键、白烧一次配额）；**空数组 `[]` 会被后端折成「检索全七类」**（`api/analysis.py` 用 falsy 判断），所以零勾选必须由前端挡在 `fetch` 之前，不能指望后端报错兜住；**取消掉装着盲区主判定的那几类只会让盲区面积偏大、不会偏小**，前后端会各挂一条同口径警示（详见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.10 与 §7.4）。
@@ -546,7 +557,7 @@ PRD §10-6：**演示现场的网络状况无法提前得知**，因此必须准
 
 > ⚠️ **口径纪律**：断网时**地图不可用是官方架构决定的既成事实**（JSAPI 运行时与地图瓦片均由百度服务器动态下发，无法 vendored），不是工程缺陷。因此本项目**不承诺「断网也能演示地图」**——正确表述是「**断网演示 = 完整报告 + 图表 + 合成示意图**；地图演示需现场可访问 `api.map.baidu.com`」。
 >
-> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（461 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
+> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（481 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
 
 ---
 
@@ -748,7 +759,7 @@ ECharts 官方**只发整包**，没有「只含 radar + bar」的官方 thin bu
 合计 +20.7 KB——移动端把手条样式与抽屉逻辑本来就只活在 `data-sheet-mode="mobile"` 那一支里，桌面一行都不多渲染），
 且**零 Vue、零 ECharts、零公网外链**（CI 有一条断言：静态 HTML 里出现 `http(s)://` 资源引用即失败）。
 
-> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（41 例），它把 `web/report.js`（26 个）与 `web/isochrone.js`（59 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在，并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
+> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（45 例），它把 `web/report.js`（26 个）与 `web/isochrone.js`（60 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在，并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
 
 ### 10.5 🔴 前 K 实测用了分层选择，而非 §4.3 字面的全局最近 K
 
@@ -805,6 +816,7 @@ PRD §4.3 第 4 条写的是「圈内 + **直线距离最近的前 K 个**」，
 | **浏览器内真实渲染** | 本环境的无头 Chrome 无输出（被沙箱挡住）。改用 Node + 最小 DOM 打桩**真跑** `web/report.js` 的渲染路径（`tools/report_dom_smoke.mjs`，**15 项**断言全部通过，`grep -c 'OK '` 实测），但它**不是**真实浏览器 |
 | **前端截图** | 截图**能拍到**（chrome-devtools MCP，2026-10-10 已用它确认过实时底图与真实路网轨迹），但本项目**仍不把 PNG 落进仓库**：一是截图里必然含百度的瓦片与版权条，二是文档里的 DOM 计数 / network / console 文字证据可复核、可 grep。历史上 browser-use 那条 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE` 限制针对的是另一个通道，不影响 chrome-devtools |
 | ✅ **JSAPI 实时底图上的顶点点击**（2026-10-10 已验） | 真跑通：`BMap.Map` 实例化、23 个 `div.BMap_Marker` 覆盖物、在顶点 #6 / #2 上派发真实指针事件 → `POST /api/isochrone/polyline` 各 200、状态行「真实路网轨迹 · 48/45 个折点 · 懒加载 1/12 与 2/12」。这一轮**同时抓出一个只在 live 下才现形的缺陷**：`market` 提示原来只认 `data_source == "live"`，第二次跑同一社区时 POI 层报 `cache`、提示就悄悄消失了（见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.9）。逐条证据在 `docs/shots/README-isochrone-acceptance.md` |
+| 🔴 **FR-103 地址行的「成功态」是打桩验的，不是真实 `live`** | 零出网下跑了四例：真实服务端 `mock` 空态（`request_id 33437b90d2c548b5`，响应体 `http_requests=0`）、同坐标重复取点**只发一次**请求（Network 面板 1 条 `/api/regeo`）、连点换点时慢响应被世代号丢弃、断网失败态文案与警示色。**成功态那一行是把 `window.fetch` 换成返回真实响应形状的桩**再量的（`data-state="ok"`、五枚字段徽标、375 宽下换行不溢出）。真实 `live` 的一跳要用掉 300 次/日逆地理配额里的 1 次，按配额纪律**等用户点头才跑**；后端 `live` 分支的形状与「不切文本」由 `tests/test_geo_api.py`（16 例，真实 `BaiduClient` + `httpx.MockTransport`）钉住 |
 | 🔴 **新发现，未修**：live 等时圈的 `body.usage` 比服务端请求级计量少记 1 次 / 4 条 | 同一次 `POST /api/isochrone`：响应体 `usage` 是 `quota_units=40 / http_requests=6 / batches_sent=6`，服务端同一 `request_id` 的 `http_request` 日志是 `quota_units=44 / http_requests=7`。差值恰好等于一个批次，方向是**少报**（真实花费 ≥ 报告值），所以 §6.1 的预算断言偏乐观。只影响 live 的等时圈路径（mock 层两账本同源，冒烟自测抓不到）。**尚未定位到具体是哪一批没并进 `ProbeTally`**，登记为待办而不是文档口径 |
 | 🔴 **新发现，未修**：桌面三栏下报告面板 `#report` 被栅格压成 300 px 宽 | 1280×800 实测：`.layout` 是 `minmax(260px,300px) minmax(0,1fr) minmax(280px,360px)` 三列，而 `#report` 是**第 4 个自动放置的子项**，掉到第 2 行第 1 列，宽度只有 300 px。后果是它里面那张九列 POI 表在桌面机上要横向滚动（`.table-wrap` `clientWidth 270 / scrollWidth 600`）、首个数据行被折成 **79 px** 高、面板总高 **7341 px**（整页 12552 px），而它右侧 541 px 那一列在同一行是空的；雷达图只剩 280×280，柱状图把 520×260 的 viewBox 等比压扁。`grep -c grid-column` 在初始提交 `f24a174` 上就是 **0**——**与移动端抽屉无关，从第一天就在**。不是一行能改完：撑成全宽后 `.chart { width: 100% }` 没有 `max-width`，雷达会涨到 ~600×600，得连 `.chart-box` 一起定口径再重测 1280 / 900 / 375 三档。逐条数字见 [`docs/shots/README-isochrone-acceptance.md`](docs/shots/README-isochrone-acceptance.md) 的「FR-107 档位显式化」一节 §5 |
 | **DevTools Network offline 下的全链路降级** | 本环境无网络拦截工具，只跑了代码审读与真实失败出口调用（现在有 AK，可用 `DATA_MODE=mock` 或停服务复现同一条降级出口） |
