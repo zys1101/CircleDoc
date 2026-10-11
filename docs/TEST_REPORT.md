@@ -5,7 +5,7 @@
 | 文档定位 | PRD §9 交付物「对比测试报告」；对应 FR-405、FR-406、§6.1、§6.2 |
 | 最后更新 | 2026-10-11 |
 | 测试命令 | `pytest -q`（零配置、零 AK、零真实出网） |
-| 结论 | **506 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
+| 结论 | **509 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
 
 ---
 
@@ -14,7 +14,7 @@
 **2026-10-10 起本项目已接入真实百度 AK**（服务端 + 浏览器端两类，配在 gitignored 的 `.env` 里）。
 所以这份报告现在有两类证据，**口径不同、不互相顶替**：
 
-* **`mock` 侧**：506 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
+* **`mock` 侧**：509 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
   也是本文 §1、§2、§3、§5 的主口径。
 * **`live` 侧**：§4.3 是一次**真实出网**的端到端实跑（三样例各一次），§6 的「JSAPI 实底图顶点点击」
   是另一次真实浏览器 + 真实出网的补验。§2.6 ~ §2.9 四个缺陷**只有在 live 下才暴露**——
@@ -46,15 +46,15 @@
 | `test_isochrone_api.py` | 26 | `/api/isochrone` 全形状、降级、polyline 12 次硬上限 | FR-201、FR-203、FR-403 |
 | `test_geo_api.py` | 27 | **`/api/regeo` 与 `/api/geocode` 的接口级用例（上一轮新增，此前一条都没有）**：§4.7 出参**平铺在顶层**、字段只来自 `addressComponent`（用一份「文本里像有区、组件里没给」的报文反证不切文本）、`location` 纬度在前而响应 `lnglat` 经度在前、同坐标第二次**命中缓存且 0 次出网**、空 results 留在 `live` 层不退合成、mock 态无 `formatted_address` 键、四类非法 `lnglat` 与境外坐标 400 且指名字段、信封带 `request_id` 且不泄 AK。<br>**本轮 +11 例 `/api/suggest`（FR-108）**：默认关闭时 `degraded_reason = suggest_disabled` 且 `transport.calls == []`（**根本没发请求**，比 200 更能证明没烧配额）、`.env` 里的 `SUGGEST_ENABLED=true` 真能到达服务（§2.13）、候选只留「有坐标且在国内」的两条并计数 `total/dropped`、按 **place 桶**计量、缺 `region` 与 < 3 字各自 400 且指名字段、空列表是**结论**而不是错误、同词第二次走缓存 0 出网、**关掉开关后已有缓存仍可读** | FR-103、FR-108、FR-101、§4.7、R1′、R8、FR-403 |
 | `test_analysis_api.py` | 46 | `/api/analysis` 报告形状、任务轮询、后台模式、`/api/poi` 七维度、错误信封、**真实检索盲区偏大提示（`live` 与 `cache` 两态各断言一次 + `sample` 反向断言）**、**FR-104 类别子集：伤及盲区主判定的 7 种勾选组合逐一断言 + 总分分母随子集收缩** | §4.7、FR-205、FR-404、§4.4、§2.9、FR-104 |
-| `test_web_smoke.py` | 59 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线、**FR-106 抽屉的把手条 ↔ 面板对账 / 断点唯一真值 / 无 JS 降级 / 44 px 规则 / 地图高度口径**、**FR-107 档位来源（`?profile=` 优先于视口探测）与简化模式徽标取自响应 `meta`**、**FR-103 地址行的接线（`setCenter` 里必须真的调用、且不 `await`）/ 三条配额守卫齐全 / 地址字段无 `split` 无 `toFixed` / 四个状态都用 `data-state`**、**FR-108 开关默认关 + 前后端门槛逐字相等 + 世代号/缓存键/在飞去重**。<br>**本轮 +3 例 FR-413**：外链反向钉死（资源标签零外链 **且** `<a>` 只允许官方那两个 URL 带 `rel="noopener noreferrer"`，把「哨兵按标签收窄」这件事本身钉住，防止它变成后门）、**页脚 TTL 三个数字对着 `Settings.model_fields` 的类默认值逐项比对**（改配置不改页脚就红）、**页脚正文对页面底色的 WCAG 对比度在测试里重算**（4.5:1 硬线）、**一键体检路径的 `request_id` 交接**（见 §2.15）。<br>**本轮 +5 例 FR-305 PNG 报告卡**：按钮在 HTML / `cache()` / 点击监听 / **导出门禁**四处都接上，且**结果提示必须写在 `syncExportState()` 之后**（按成功与失败**分支各自**判，见 §2.19）；合规文案只能 `querySelector` 读页脚、**读不到就抛错**，不许在 JS 里存第二份；**不许碰底图画布**（`report.js` 里不出现 `toDataURL`，两张图的宿主写死是 `#radar-chart` / `#bar-chart`）；SVG → data URL 走 `encodeURIComponent` 而不是 `btoa`（中文标签会让后者直接抛），且配色按 `getComputedStyle` 内联；卡片三种文字色对卡底在测试里**重算 WCAG 对比度**（实测 15.52 / 7.56 / 4.87，最紧的是降级提示那条琥珀色） | R11、R12、R13、FR-213、FR-104、FR-106、FR-107、FR-103、FR-108、FR-413、**FR-305**、条款 3.3.4 / 6.6 / 7.3 |
+| `test_web_smoke.py` | 62 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线、**FR-106 抽屉的把手条 ↔ 面板对账 / 断点唯一真值 / 无 JS 降级 / 44 px 规则 / 地图高度口径**、**FR-107 档位来源（`?profile=` 优先于视口探测）与简化模式徽标取自响应 `meta`**、**FR-103 地址行的接线（`setCenter` 里必须真的调用、且不 `await`）/ 三条配额守卫齐全 / 地址字段无 `split` 无 `toFixed` / 四个状态都用 `data-state`**、**FR-108 开关默认关 + 前后端门槛逐字相等 + 世代号/缓存键/在飞去重**。<br>**本轮 +3 例 FR-413**：外链反向钉死（资源标签零外链 **且** `<a>` 只允许官方那两个 URL 带 `rel="noopener noreferrer"`，把「哨兵按标签收窄」这件事本身钉住，防止它变成后门）、**页脚 TTL 三个数字对着 `Settings.model_fields` 的类默认值逐项比对**（改配置不改页脚就红）、**页脚正文对页面底色的 WCAG 对比度在测试里重算**（4.5:1 硬线）、**一键体检路径的 `request_id` 交接**（见 §2.15）。<br>**本轮 +5 例 FR-305 PNG 报告卡**：按钮在 HTML / `cache()` / 点击监听 / **导出门禁**四处都接上，且**结果提示必须写在 `syncExportState()` 之后**（按成功与失败**分支各自**判，见 §2.19）；合规文案只能 `querySelector` 读页脚、**读不到就抛错**，不许在 JS 里存第二份；**不许碰底图画布**（`report.js` 里不出现 `toDataURL`，两张图的宿主写死是 `#radar-chart` / `#bar-chart`）；SVG → data URL 走 `encodeURIComponent` 而不是 `btoa`（中文标签会让后者直接抛），且配色按 `getComputedStyle` 内联；卡片三种文字色对卡底在测试里**重算 WCAG 对比度**（实测 15.52 / 7.56 / 4.87，最紧的是降级提示那条琥珀色）。<br>**本轮桌面报告版式 +3 例**（见 §2.20）：**`#report` 在桌面栅格里必须占满整行**（`grid-column: 1 / -1`，缺它就被 `minmax(260px,300px)` 钉成 300 px 窄条）、**图表宽度上限只绑定在抽屉断点之上**（`max-width` 与 `matchMedia` 那个数字同源，769 以下放开、之上钉死，防止撑成全宽后雷达涨到 600 px）、**评分卡三档文字色对渐变两端各 9 个组合重算对比度**（不是对着「大概是个蓝底」验）。这三条全是静态文本断言（读 CSS 源码），零出网、零浏览器 | R11、R12、R13、FR-213、FR-104、FR-106、FR-107、FR-103、FR-108、FR-413、**FR-305**、条款 3.3.4 / 6.6 / 7.3 |
 | `test_samples_baseline.py` | 16 | 三样例一致性、三型差异方向、基线不漂 | FR-102、FR-412、§6.1 |
 | `test_coord_param_table.py` | 13 | 接口 × 坐标参数名 × 坐标顺序常量表 | FR-406、R8 |
 | `test_health_contract.py` | 11 | `/api/health` 三个「数据模式」字段的位置与值域、零配置横幅、AK 不外泄 | §4.6、FR-404、FR-410 |
 | `test_cache_store_singleton.py` | 4 | 缓存单例口径唯一 | FR-402 |
-| **合计** | **506** | | |
+| **合计** | **509** | | |
 
-耗时：**4.95 ~ 5.41 s**（同一轮 506 例，本机对**最终代码状态**连续五次实测，
-4.95 / 5.19 / 5.20 / 4.96 / 5.41 s，全 `exit=0`；`chrome-devtools` 与 node MCP 全程在线）。
+耗时：**4.92 ~ 5.13 s**（同一轮 509 例，本机对**最终代码状态**连续五次实测，
+4.94 / 5.13 / 5.03 / 4.92 / 4.97 s，全 `exit=0`；`chrome-devtools` 与 node MCP 全程在线）。
 上一轮记录的 8.94 / 11.55 s **不是代码回归**而是后台负载：那次 `chrome-devtools` 浏览器与它的 node MCP 服务都在跑，
 纯 CPU 基准 `sum(range(10**7))` 同时段实测 0.644 s（正常量级的两倍），最慢单例
 `test_task_registry_is_bounded` 也从 0.68 s 涨到 1.9 ~ 2.3 s。本轮五次测量时浏览器 MCP
@@ -87,9 +87,9 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 
 ---
 
-## 2. 开发过程中发现并修复的十九个真实缺陷
+## 2. 开发过程中发现并修复的二十个真实缺陷
 
-这十九个都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
+这二十个都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
 「把 CI 脚本真的执行一遍」「在最小 DOM 打桩下真跑一遍绘制路径」
 「把移动端抽屉在 DevTools 里真拖一遍并量 `getBoundingClientRect`」
 「**配上真实 AK 跑一遍 live 全链路**」之后暴露的。
@@ -106,6 +106,8 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 §2.18 / §2.19 是 FR-305 这一轮的两条，**共同点是三套门禁与「跑一次看条数」都拦不到**：
 一条是冒烟脚本中间多了一份 `process.exit`，让 5 条断言从建仓起就是不可达代码（输出稳定 15 项 OK、
 退出码 0，看着完全正常）；一条是导出反馈被门禁函数覆盖回默认文案，**只有真点一次、真读一次提示**才看得出来。
+§2.20 是**只有真实浏览器能看见的一类**：`#report` 在桌面三栏下被压成 300 px 窄条，自初始提交就存在，
+509 例单测、两套冒烟自测与 `node --check` 全都不读 CSS 布局，所以它躲过了前面每一条门禁。
 
 ### 2.1 `services/poi_search.py`：7 处协程未 `await`（会导致接口 500）
 
@@ -731,6 +733,85 @@ head sha `98b14781…`）：三个 job 全部 `completed / success`——
 （热跑是 89 / 82 / 85 / 50 / 58 ms 那批），我 900 ms 的探针在冷跑那一次还没抓到下载事件，
 **没量出冷跑的确切毫秒数，所以这里不写冷跑数字**。
 
+### 2.20 🔴 桌面三栏下报告面板被栅格压成 300 px 窄条（自 `f24a174` 起存在，本轮修掉）
+
+**现象**：1280×800 真实 Chrome 里 `#report` 宽 **300 px**。它装的是九列 POI 表和六维雷达图，
+后果全部可量：`.table-wrap` `clientWidth=270 / scrollWidth=600`（桌面机上报告里的表**要横向滚动**）、
+首个数据行被折成 **79 px** 高（单元格逐列折行）、雷达 svg 只剩 **280×280**、
+柱状图把 `520×260` 的 viewBox 等比压到 280 宽，而它右侧那条 **541 px** 的列在同一行是空的。
+
+**根因**：`.layout` 是三列栅格
+（`minmax(260px,300px) minmax(0,1fr) minmax(280px,360px)`），而 `#report` 是**第 4 个自动放置**的子项，
+于是掉到第 2 行第 1 列，宽度被第一列的 `minmax(260px,300px)` 钉死。
+`grep -c grid-column` 在初始提交上就是 **0** —— 与 FR-106 移动端抽屉无关，**从第一天就在**。
+
+**为什么改前那 506 例抓不到它**（本轮之后是 509）：`test_web_smoke.py` 里**确实有**读 CSS 的断言，
+但读的都是**颜色、断点数字、44 px 热区**这类「文本级」口径（FR-413 那轮量页脚底色、FR-106 那轮量抽屉），
+**没有任何一条读过 `.layout` 的轨道声明与子项放置**；`tools/report_dom_smoke.mjs` 是最小 DOM 桩、
+**没有 CSSOM**，`getComputedStyle` 拿不到真实布局结果。「宽度 300」这件事只存在于把页面真打开的那条通道里
+——这也是本轮那三条新断言的定位：它们**读栅格文本**（能离线跑），但**尺寸与溢出那半只有浏览器给得了**，
+所以两套证据必须并存，谁也不能顶掉谁。
+
+**修复不是一行**：只加 `grid-column: 1 / -1` 会让 `.chart { width: 100% }` 没有上限——
+雷达直接涨到 **589×589**（下表 S1）。所以拆成两条：`#report` 撑满整行，**加上** `.chart` 的上限
+只绑定在**抽屉断点之上**（雷达 320、柱状 520），断点之下仍 `width: 100%`，让 375 抽屉里铺满 346。
+
+三态实测（**同一份数据、同一个 `request_id`**，注入 `<style>` 逐条中和，不是跑三次）：
+
+| 状态 | `#report` | 雷达 svg | 柱状 svg | POI 行高 | `.table-wrap` client / scroll |
+| --- | --- | --- | --- | ---: | --- |
+| S0 改前（HEAD 原样） | 300 × 10 250 | 280 × 280 | 280 | 79 | 270 / 600 |
+| S1 只加 `grid-column` | 1225 × 3 913 | **589 × 589** | 589 | 26 | 1195 / 1195 |
+| S2 两条都加（当前树） | 1225 × 3 644 | 320 × 320 | 520 × 260 | 26 | 1195 / 1195 |
+
+四档复测：769（单列区间）面板 714 宽、两块图堆叠、表 685/685、无横向溢出；
+**1082 有无这条规则读数完全一致**（单列区间是 no-op，已证）；1122 三列、面板 1067、表 1038/1038；
+1280 见 S2。375×667×3 抽屉**无回归**（`#report` 仍 `position: fixed`，抽屉顶 175 / 高 440 / 宽 375、
+卡 346×203、整页零横向溢出）。
+
+⚠️ **上一轮登记的「面板总高 7 341 px」与本轮的 10 250 px 不可比**：7 341 那次跑的是**被缓存污染**的数据
+（69 行），本轮关掉缓存后是 48 行——**行数更少反而更高**，说明两次之间还有别的变量（不同的 `notes` 文案长度
+与 `request_id`），我没有回到旧服务复现那一次，所以本节只引用**同一台机器、同一份数据、同一 `request_id`**
+的那三态，旧数字作废而不是「被修正」。
+
+**顺带照出 §2.7 的复发**：本轮在旧 8806 服务上复现同一份报告得 **67.8 C / 盲区 47.63 %**，
+而 `pytest -q` 509 例与 `tools/gen_samples.py --check` 全绿——⚠️ **这句「全绿」有一半是测试顺序给的假象**，
+本轮把 `tests/test_samples_baseline.py` **单独**跑一遍就红了：`assert 67.8 == 98.24`（§2.7 那对数字，
+在**当前代码**上原样复现）。三条命令实测（每条都在这台带脏缓存的机器上跑过）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `pytest tests/test_samples_baseline.py` | **1 failed**, 15 passed（`67.8 != 98.24`） |
+| `pytest tests/test_analysis_api.py tests/test_cache_store_singleton.py tests/test_samples_baseline.py` | 66 passed |
+| `pytest -q`（全量） | 509 passed |
+
+`test_cache_keys_ttl.py` + 基线**仍然红**，要 `test_analysis_api.py` **加上** `test_cache_store_singleton.py`
+才转绿 —— 所以真凶是**进程级缓存单例**：`run_analysis` 直接调用时用的是那时那刻的 store 单例，
+前面的文件一旦调过 `reset_cache_store(...)` 把它换成 tmp 路径或禁用态，后面的基线断言就读不到真数据了。
+**这条登记在 §6，本轮没修**。能确定的干净复现命令只有一条（本轮实测）：
+`CACHE_ENABLED=false pytest tests/test_samples_baseline.py` → **16 passed**；
+只压 `BAIDU_SERVER_AK=` 不压 `CACHE_ENABLED` 照样红。⚠️ `-o cache_db_path=...` 试过了，**压不掉**——
+那是 pydantic-settings 读的，不是 pytest ini。
+回到污染本身：`data/cache.db`（118 784 字节，10-10 live 验收时写的；
+本轮 `select created_at` 实测 16 行全在 2026-10-10 15:27~15:32，文件 mtime 也是 10-10）里装着真实 POI，
+而 `data_mode=mock` 只保证「不出网」，`_resolve_dimension` 在进 mock 分支**之前**先读一次本地 SQLite。
+换成 `CACHE_ENABLED=false` 起服务后立刻回到 **98.2 A / 3.53 %**。
+**真实数据没有受损**：mock 分支返回 `_sample_group` 且**不写回缓存**，那条 live 条目没被覆盖。
+口径此前只写在 `tools/gen_samples.py` 的注释里，README / DESIGN / TEST_REPORT **一处都没有**；
+本轮补进 README §10.4 第 3 步、本文 §7 第 1 与 5b/5c 步与验收文档。
+**仍未修的是运行期语义本身**：`data_mode=mock` 到底该不该读缓存是一个产品口径问题，
+不是这一轮的一行修复（登记在 §6）。
+
+🔴 **本轮新登记的第二个问题（未修）**：`test_mock_report_matches_the_checked_in_baseline`
+的**通过与否取决于测试顺序**——单独跑该文件在带脏缓存的机器上**必红**，
+全量跑却因为前面的文件替换了进程级 store 单例而**恰好绿**。
+详见 §2.20 末那三条命令的实测表。它的含义要说准：**「509 例全绿」并不证明基线可复现**，
+只证明「在这个顺序、这台机器的当前缓存状态下整条链路没崩」。
+干净口径要么按 §7 第 1 步那样显式压掉缓存，要么在 CI（无 `.env`、无 `data/cache.db`）里跑。
+**修法没有一行级的**：要么给这条断言显式注入 `cache_enabled=False` 的 settings（与 `gen_samples.py` 同源，
+是最小改动），要么给 `run_analysis` 加一个「本次不许读缓存」的参数——两者都要重新对账 §6.1 那句
+「缓存命中下 100 % 可复现」的口径，属于产品判定而不是修 bug。
+
 ---
 
 ## 3. 对比实验：串行 `direction` vs 批量算路（FR-405）
@@ -1024,11 +1105,13 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 | ~~样例社区坐标的真实性~~ | ✅ **2026-10-10 已补验**，见 §4.3 第 1 步 | 三条坐标走 `/api/suggest` 取得并交叉核对行政区，`coord_verified: true` |
 | ~~JSAPI 4.0 **实底图**渲染~~ | ✅ **2026-10-10 已补验**：真实浏览器加载 JSAPI 4.0、23 个 `BMap_Marker`、在顶点上派发真实指针事件 → `POST /api/isochrone/polyline` 200 并画出真实路网轨迹（48/45 折点）。证据在 `docs/shots/README-isochrone-acceptance.md` | 这一轮**抓出了 §2.9**（提示只认 `live`）。仍未验的两项：12 次硬上限与连点竞态**在实时底图路径上**（同一份 `loadPolyline()`，SVG 路径已实测；再跑要烧 10 次真实 `direction`，按配额纪律不跑） |
 | 🔴 **新发现，未修**：live 等时圈的响应体 `usage` 比服务端请求级计量少记 | 同一次 `POST /api/isochrone`：`body.usage` 是 `quota_units=40 / http_requests=6`，同 `request_id` 的服务端日志是 `44 / 7`，差一个批次 | 方向是**少报**（真实花费 ≥ 报告值），所以 §6.1 的预算断言在 live 等时圈这条路径上偏乐观。mock 层两账本同源、冒烟自测抓不到。**尚未定位**是哪一批没并进 `ProbeTally`，登记为待修而不是文档口径 |
-| 🔴 **新发现，未修**：桌面三栏下 `#report` 被栅格挤成 300 px 宽 | 1280×800 实测：`.layout` 是三列（`300px 540.8px 360px`），`#report` 是第 4 个自动放置的子项，落到**第 2 行第 1 列**，宽度被 `minmax(260px, 300px)` 钉死 | 它装的是九列 POI 表和六维雷达图：`.table-wrap` `clientWidth=270 / scrollWidth=600`（桌面机上报告里的表**要横向滚动**）、首个数据行高 **79 px**（单元格逐列折行）、`#report` 高 **7341 px**、整页 **12552 px**，而它右侧那条 541 px 的列在同一行是空的；雷达 svg 只剩 280×280，柱状图把 520×260 的 viewBox 等比压到 280 宽。自 `7cee8f8` 起就存在，与 FR-106 / FR-107 无关。**不是一行能改完的**：`#report` 撑成全宽后 `.chart { width: 100% }` 没有 `max-width`，雷达会涨到 ~600×600，得连 `.chart-box` 一起定口径并重测 1280 / 900（单列堆叠）/ 375（抽屉）三档 |
+| ✅ ~~桌面三栏下 `#report` 被栅格挤成 300 px 宽~~ **2026-10-11 已修**（§2.20） | 1280×800 实测：`.layout` 是三列（`300px 540.8px 360px`），`#report` 是第 4 个自动放置的子项，落到**第 2 行第 1 列**，宽度被 `minmax(260px, 300px)` 钉死。自**初始提交 `f24a174`** 就存在（上一轮这里写的 `7cee8f8` 是 10-11 的一个修复提交，不是起点——本轮 `git log --reverse -- web/isochrone.css` 实测首条就是 `f24a174`） | 改前 / 只加一条 / 两条都加**三态在同一份数据、同一个 `request_id` 上实测**：面板 300 → 1225 宽、高 10 250 → 3 644，雷达 280×280 → 589×589 → **320×320**（只加 `grid-column` 会让它涨过口径，所以 `.chart` 的上限是必需的另一半），柱状 280 → 520×260，POI 行高 79 → 26，`.table-wrap` 从 `270 / 600`（要横滚）变成 `1195 / 1195`。复测 769 / 1082 / 1122 / 1280 四档 + 375 抽屉无回归；1082 那档证明这条规则在单列区间是 no-op。三条静态断言进 `test_web_smoke.py`，四条「改坏」实测都能测红。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「桌面报告版式与评分卡」一节 |
+| 🔴 **新发现，未修**：`data_mode=mock` 到底该不该读本地缓存，是个**产品口径**问题 | `poi_search._resolve_dimension`（与 `geo.py` 同一层）在进 mock 分支**之前**先读一次本地 SQLite，所以「mock」只保证不出网、不保证「只用合成数据」。本轮就在真实浏览器里被它咬了一次：旧 8806 服务上同一份报告 67.8 C，`CACHE_ENABLED=false` 起服务后 98.2 A（§2.7 的复发，基线生成器早就关了缓存，**只有运行期这条路没关**） | 现在靠**文档口径**兜（README §10.4 第 3 步、本文 §7 第 5c 步都写明要 `CACHE_ENABLED=false`），代码语义未动。真要改是二选一：① mock 层跳过缓存读（那 `cache` 模式与 `mock` 的边界要重写，且 `test_cache_keys_ttl.py`（86 例）与 `test_cache_store_singleton.py`（4 例）的口径要跟着对账）；② 保持读缓存，但报告里把「本次混入了 N 条缓存中的真实数据」写进 `meta`/`notes`（**这条更轻**，但要多一个「缓存命中的是不是 live 数据」的判定）。按配额纪律与「不静默改结论口径」两条，**这一轮两个都没做**，登记为待决策 |
+| 🔴 **新发现，未修**：基线可复现那条断言**绿得依赖测试顺序** | `pytest tests/test_samples_baseline.py` 在这台带脏缓存的机器上**必红**（`assert 67.8 == 98.24`），`pytest -q` 全量**却绿**；实测要 `test_analysis_api.py` + `test_cache_store_singleton.py` 同时在前才转绿，只加 `test_cache_keys_ttl.py` 不转（§2.20 末那张三行表） | 直接后果是**「509 例全绿」不能当成「基线可复现」的证据**——它只证明「这个顺序 + 这个缓存状态下整条链路没崩」。CI 里两件事同时成立（无 `.env`、无 `data/cache.db`），所以 CI 的绿是真的；**开发机的绿是顺序给的**。临时口径：单跑基线文件时显式 `CACHE_ENABLED=false`（实测 16 passed；只压 `BAIDU_SERVER_AK=` 不压它照样红；`-o cache_db_path=` 压不掉，那是 pydantic-settings 读的）。真正的修法要么给这条断言注入 `cache_enabled=False` 的 settings（与 `gen_samples.py` 同源，最小改动），要么给 `run_analysis` 加「本次不许读缓存」的参数——两者都要重新对账 §6.1「缓存命中下 100 % 可复现」那句口径，属产品判定，**本轮没动** |
 | live 模式下 FR-221 盲区结论的**准确性** | `market` 系统性为 0，见 §4.4 | 盲区面积在 live 模式下**系统性偏大**，不能当成真实结论呈现；根因已定位在检索层，无 PRD 框架内的干净修法。**2026-10-10 定口径：接受并明示**（见 §4.4 末的决策段）——真实检索那一侧（`data_source = live` **与 `cache`**）的报告由后端 `notes` 自动带这条提示，`mock` 口径不受影响；`cache` 一起算的原因见 §2.9 |
 | `docker compose up` | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → `/api/health` + `/api/samples` + `POST /api/analysis` 可服务）。**仍未验**：compose 的起停、以及 CI 没挂 `-v` 所以「Linux 宿主 UID 1000 对 `./data` 的写权限」这条在开发机上复现不出来 |
 | ~~🔴 **FR-106 底部抽屉：功能未实现**~~ | ✅ **2026-10-11 已实现并补验**，抽屉自身的两处缺陷见 §2.12，逐条测量见 `docs/shots/README-isochrone-acceptance.md` 的「FR-106 移动端底部抽屉」一节 | 这条 10-11 才登记为「未实现」，同日落地。PRD §6.3 的「两档视口 375×667 / 414×896 无横向滚动、无元素重叠」现在**有可复现的测量记录了**（`scrollWidth / clientWidth` 两档都是 375/375 与 414/414，逐元素热区 ≥ 44 px）。**仍未验**的是真机手感那三项（下一行）——抽屉能拖不等于手指好拖 |
-| ~~**FR-107 只能按视口宽度自动降档，无法手动指定**~~ | ✅ **2026-10-11 已补**：`?profile=m` / `?profile=d` 覆盖 `matchMedia` 探测，报告头徽标按**响应** `meta.lightweight` / `meta.k` 写 | 四例真实浏览器实测 + 三次 curl 直连后端，逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-107 档位显式化」一节。**顺带照出一个口径事实**：两档分数**既可能相同也可能不同**——天坛中心点 `k=6` 与 `k=12` 都是 44.65（D），交道口样例则是 `mobile` 63.03（C，`reqid f27f8945bff7452c`）vs `desktop` 67.8（C，`reqid bd00c4063e6a43e8`），差 4.77 分。所以「轻量档只是省调用、不影响结论」这句**不成立**，徽标里那句「别把两档的分数横向比较」是必需的而不是客套 |
+| ~~**FR-107 只能按视口宽度自动降档，无法手动指定**~~ | ✅ **2026-10-11 已补**：`?profile=m` / `?profile=d` 覆盖 `matchMedia` 探测，报告头徽标按**响应** `meta.lightweight` / `meta.k` 写 | 四例真实浏览器实测 + 三次 curl 直连后端，逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-107 档位显式化」一节。**顺带照出一个口径事实**：两档分数**既可能相同也可能不同**——⚠️ 上一轮这一行写的「交道口 `mobile` 63.03（C）vs `desktop` 67.8（C），差 4.77 分」是**缓存污染**下的两个数（§2.20 末），本轮 `CACHE_ENABLED=false` 重测：交道口 `k=6` **92.1 A**（盲区 0.00 %）vs `k=12` **98.2 A**（3.53 %），差 **6.1** 分；天坛中心点 `k=6` 与 `k=12` **都是 44.6 D**，但盲区是 **98.92 % vs 94.66 %**——**同分而盲区反向移动**，轻量档并不是「少跑几维、结论不变」。所以「轻量档只是省调用、不影响结论」这句**不成立**，徽标里那句「别把两档的分数横向比较」是必需的而不是客套。**换到干净数据后等级也换了**：污染态两档都是 C，干净态两档都是 A |
 | **FR-103 地址行的真实 `live` 一跳** | 零出网下**四例已验**（真实服务端 mock 空态 + 前端缓存去重 + 世代号挡过期响应 + 断网失败态），但**成功态是打桩验的**：把 `window.fetch` 换成返回真实响应形状的桩后量 `data-state="ok"`、五枚字段徽标与 375 宽下的换行 | 后端 `live` 分支不靠这条打桩：`tests/test_geo_api.py` 用**真实 `BaiduClient` + `httpx.MockTransport`** 跑完整解析链（该文件 27 例里 regeo / geocode 占 16 例，含「组件里没给区就不许从文本切出区」的反证）。真实 `live` 的一跳要烧 300 次/日逆地理配额里的 1 次，**按配额纪律等用户点头才跑**；逐条证据与 `request_id` 见 `docs/shots/README-isochrone-acceptance.md` 的「FR-103 中心点地址回显」一节 |
 | 🔴 **FR-108 候选列表的真实 `live` 一跳 + `/place/v2/suggestion` 报文形状** | 零出网下**七例已验**（默认关闭零请求 / 两个本地门槛零请求 / 真实一跳打到本地 `mock` 后端 / 打桩后渲染与点选与键盘 / 前端缓存命中不再发 / 换城市重问 / 世代号丢慢响应 / 移动端抽屉滚动进视口），但**候选列表本身是 `window.fetch` 打桩量的** | 三件没验：① 真实 `live` 一跳要烧「地点输入提示与检索**共用** 100 次/日」池子里的 1 次，等用户点头；② `flyTo` 在无浏览器 AK 的机器上跑不了，只留 `panTo` 退路 + `typeof` 守卫（`tests/test_web_smoke.py` 断言这条退路在）；③ **`_parse_suggest` 的字段名是按 `docs/BAIDU_API_NOTES.md` §2.4 写的，而那一节本身没记返回体形状**——单测用的是自造桩件，真字段名（`name` / `location` / `city` / `district` / `adcode` / `province`）必须等 live 那一跳逐字段核对，核对不上就是「列表永远空」这种安静失败。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-108 地址联想」一节 |
 | 移动端**真机**行为 | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
@@ -1045,6 +1128,10 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 # 1) 全量单测（零配置、零 AK、零出网）
 #    ⚠️ 如果本机 .env 里配了真实 AK，按 CI 口径先把它们压掉，别依赖「碰巧没读到」：
 #      DATA_MODE=mock BAIDU_SERVER_AK= BAIDU_BROWSER_AK= pytest -q
+#    ⚠️ 如果本机 data/cache.db 里有真实 POI（跑过 live 的机器必然有），
+#      **全量绿不代表基线可复现**——它绿是靠前面的文件替换了进程级缓存单例（§2.20、§6）。
+#      单跑基线文件要显式压掉缓存，否则在脏缓存机器上是 1 failed / 15 passed：
+#      CACHE_ENABLED=false pytest tests/test_samples_baseline.py   # 实测 16 passed
 pytest -q
 
 # 2) 词表自检（官方 POI 分类表逐词核对）
@@ -1061,11 +1148,19 @@ python tools/bench_route_strategy.py --out docs/bench_route_strategy.json
 node tools/report_dom_smoke.mjs
 
 # 5b) 地图两个叠加图层的绘制路径（FR-212 / FR-222，需要 node + 一份真实响应）
+#     ⚠️ 生成桩输入这一条**同样走运行期缓存**：脏缓存机器上不加前缀会得到 67.8 / 44 条的桩，
+#       冒烟自测照样 12 项全过（它数的是绘制路径，不核对分数）——**桩是污染的，测试却看不出来**。
+#       前缀实测对比：无 `CACHE_ENABLED` → `67.8 / 44`；`CACHE_ENABLED=false` → `98.24 / 48`（与基线一致）。
 python -c "import json;from fastapi.testclient import TestClient;from api.app import app;open('_map_input.json','w',encoding='utf-8').write(json.dumps(TestClient(app).post('/api/analysis',json={'sample_id':'beijing-jiaodaokou','minutes':15,'data_mode':'mock'}).json(),ensure_ascii=False))"
 node tools/map_layers_smoke.mjs _map_input.json
+#     干净口径（在脏缓存机器上照这条跑，桩里才是基线那份数）：
+#     BAIDU_SERVER_AK= BAIDU_BROWSER_AK= CACHE_ENABLED=false python -c "…同上…"
 
 # 5c) 报告卡 PNG（FR-305）——**只能在真实浏览器里量**，Node 桩没有 CSSOM 与 canvas
-#     BAIDU_SERVER_AK= BAIDU_BROWSER_AK= python -m uvicorn api.app:app --host 127.0.0.1 --port 8805
+#     ⚠️ 起服务这一条**必须带 `CACHE_ENABLED=false`**：脏缓存机器上按老写法起 8806，页面里点出来的
+#       就是 67.8 C / 盲区 47.63 % 那份污染报告（§2.20）。本轮量版式用的是这一条：
+#     DATA_MODE=mock BAIDU_SERVER_AK= BAIDU_BROWSER_AK= CACHE_ENABLED=false \
+#       python -m uvicorn api.app:app --host 127.0.0.1 --port 8805
 #     打开 http://127.0.0.1:8805/isochrone.html，点「一键体检」，然后在控制台跑：
 #       const R = window.CircleDocReport;
 #       const blob = await R.buildPngBlob(R.getCurrent());
@@ -1110,12 +1205,12 @@ CI 本来就没有 `.env`，这条改动对它无感；2026-10-10 复跑 `m1` 35
 | `report.js` 取的 DOM 节点数 | `grep -o 'getElementById("[^"]*"' web/report.js \| sed 's/.*("\(.*\)"/\1/' \| sort -u \| wc -l` | **27** | 24 → 25 → 26（FR-107 新增 `#profile-badge`）→ **27**（FR-305 新增 `#export-png`）。FR-413 那轮复用了已有的 `#request-id-foot`，当时三个数（26 / 62 / 96）一个没变 |
 | `isochrone.js` 取的 DOM 节点数 | 同上换成 `web/isochrone.js` | **62**（本轮未动） | 58 → 59（FR-106 新增 `#sheet-bar` 及其三个 tab）→ 60（FR-103 新增 `#center-address`）→ **62**（FR-108 新增 `#suggest-on` 与 `#suggest-list`）。`web/isochrone.html` 的 `id=` 去重后同步到 **97**（FR-305 加按钮那一个） |
 | `report_dom_smoke.mjs` 断言条数 | `node tools/report_dom_smoke.mjs \| grep -c 'OK '`，**并且** `grep -c '^check(' tools/report_dom_smoke.mjs` | **21 = 21**，`exit=0` | 🔴 此前一直记 **15**，而 15 是**真的少跑了 5 条**：脚本里有两份「汇总 + `process.exit`」，中间那份让末尾 5 条断言从建仓起就是不可达代码（§2.18）。删掉中间那份 = 20，本轮加 PNG 接线那条 = **21**。左列两条命令**必须相等**，单看 `OK` 数分不清「跑绿」与「没跑」 |
-| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12**，`exit=0`（桩输入按本文 §7 第 5b 条那条命令重新生成：**96 784** 字节，本轮再跑还是这个数；早前用另一个中心点生成过 **57 901** 字节的桩输入，同样 12 项——**字节数随请求变、断言数不变**，别拿文件大小当回归信号） | 上一轮也写 12 —— 但**那个 12 是抄的**，同一提交上这条脚本崩了、`grep -c` 实返 `0`，见 §2.11 |
-| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **59**（`59 tests collected in 0.30s`） | 27 → 18（README §10.4 曾写）→ FR-104 补到 31 → FR-106 补到 39 → FR-107 补到 41 → FR-103 补到 45 → FR-108 补到 51 → FR-413 新增 3 例到 54 → **FR-305 新增 5 例（按钮接线与提示顺序 / 合规文案单一来源 / 不碰底图画布 / CJK 光栅化 / 卡片文字色对比度重算）到 59** |
+| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12**，`exit=0`。⚠️ 本轮重生成桩输入时**两种缓存态都量过**：默认（脏缓存）→ `96 784` 字节、`67.8 / 44` 条；`CACHE_ENABLED=false` → **`80 677`** 字节、`98.24 / 48` 条（与基线一致）。**两次都是 12 项全过、`exit=0`** —— 这条冒烟数的是绘制路径，**对数据层不敏感，所以它拦不住污染**（§2.20）。早前用另一个中心点也生成过 57 901 字节的桩输入，同样 12 项：字节数随请求与数据层变、断言数不变，**别拿文件大小当回归信号** | 上一轮也写 12 —— 但**那个 12 是抄的**，同一提交上这条脚本崩了、`grep -c` 实返 `0`，见 §2.11 |
+| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **62**（`62 tests collected in 0.29s`） | 27 → 18（README §10.4 曾写）→ FR-104 补到 31 → FR-106 补到 39 → FR-107 补到 41 → FR-103 补到 45 → FR-108 补到 51 → FR-413 新增 3 例到 54 → FR-305 新增 5 例（按钮接线与提示顺序 / 合规文案单一来源 / 不碰底图画布 / CJK 光栅化 / 卡片文字色对比度重算）到 59 → **本轮桌面版式 +3 例（栅格整行 / 图表上限只绑抽屉断点 / 评分卡渐变两端 × 三档文字色重算）到 62** |
 | `test_geo_api.py` 例数 | `pytest -q --collect-only tests/test_geo_api.py` | **27**（本轮未动，复测确认） | FR-103 那轮新增文件（16 例）→ **FR-108 那轮 +11 例 `/api/suggest`**：`/api/suggest` 此前同样**没有任何接口级用例**，只在启动探测里被间接触碰 |
 | `test_health_contract.py` 例数 | 同上换成该文件 | **11** | 本文 §1 表写 10（一轮重算合计时暴露，已就地改成 11） |
-| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **506**（FR-305 落地后对最终代码状态连续五次 `exit=0`，4.93 / 4.97 / 4.84 / 4.81 / 4.85 s） | 451 → FR-106 后 459 → FR-107 补 2 例到 461 → FR-103 补 20 例（16 + 4）到 481 → FR-108 补 17 例（11 + 6）到 498 → FR-413 新增 3 例到 501 → **FR-305 新增 5 例到 506** |
-| `web/` 八个静态文件合计体积（PRD §5 的 500 KB 预算） | `wc -c web/* \| tail -1` → `276 678 total`（⚠️ 别再手写 `wc -c web/* \| awk '{s+=$1} END{…}'`：`wc` 多文件时**自己就带一行 total**，那样是把它加了两遍，实返 **540.4 KB**，比真实值大一倍——本轮就这么错过一次） | **276 678 字节 = 270.2 KB = 预算的 54 %** | 🔴 README §10.4 那张表停在 **235.7 KB / 47 %**，是 FR-106/107 那轮量的；后面四轮（FR-103 / FR-108 / FR-413 / FR-305）一直在往同一批文件里加代码，**谁都没回来改这个数**。差额 34.5 KB 里 `isochrone.js` 15.1 KB、`report.js` 12.9 KB。结论（远未超预算、零第三方资源）没变，但数字必须重测才能写 |
+| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **509**（桌面版式落地后对最终代码状态连续五次 `exit=0`，4.94 / 5.13 / 5.03 / 4.92 / 4.97 s）<br>🔴 **但这个绿不代表基线可复现**：同一棵树上 `pytest tests/test_samples_baseline.py` **单独跑必红**（`assert 67.8 == 98.24`），全量绿是靠前面的文件替换了进程级缓存单例（§2.20 末三条命令的实测表）。CI 那侧没有这个污染源（仓库不签入 `data/cache.db`，`infra/cache_store.py` 头注释第 3 条「镜像内不得预置任何 `.db`」+ 惰性建库；**这是按代码与仓库内容推的，本轮没在 CI 上实测这一条**） | 451 → FR-106 后 459 → FR-107 补 2 例到 461 → FR-103 补 20 例（16 + 4）到 481 → FR-108 补 17 例（11 + 6）到 498 → FR-413 新增 3 例到 501 → FR-305 新增 5 例到 506 → **本轮桌面版式新增 3 例到 509** |
+| `web/` 八个静态文件合计体积（PRD §5 的 500 KB 预算） | `wc -c web/* \| tail -1` → 本轮 **`278 583 total`**（⚠️ 别再手写 `wc -c web/* \| awk '{s+=$1} END{…}'`：`wc` 多文件时**自己就带一行 total**，那样是把它加了两遍，实返 **540.4 KB**，比真实值大一倍——本轮就这么错过一次） | **278 583 字节 = 272.1 KB = 预算的 54 %**（本轮 +1 905 字节：`isochrone.css` 21.1 → **21.7 KB**、`report.css` 7.3 → **8.7 KB**，其余六个文件一个字节没动） | 🔴 README §10.4 那张表停在 **235.7 KB / 47 %**，是 FR-106/107 那轮量的；后面四轮（FR-103 / FR-108 / FR-413 / FR-305）一直在往同一批文件里加代码，**谁都没回来改这个数**。差额 34.5 KB 里 `isochrone.js` 15.1 KB、`report.js` 12.9 KB。结论（远未超预算、零第三方资源）没变，但数字必须重测才能写 |
 
 **本轮新增的纪律：复核命令要连着看退出码，还要拿「应该有多少条」去对账。** `grep -c 'OK '` 在崩溃的
 输出上照样返回一个数（`0`，§2.11），而 §2.18 更进一层：它返回 **15**、`exit=0`、一切正常，

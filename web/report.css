@@ -69,16 +69,25 @@
   display: none;
 }
 
-/* --- 评分卡 ----------------------------------------------------------------------------- */
+/* --- 评分卡 -----------------------------------------------------------------------------
+   整页唯一的「结论第一眼」，所以给它一块蓝渐变而不是一块 `--card-bg` 灰卡。
+   渐变两端的白字都过 AA：对浅的那端 `#2563eb` 实测 **5.17:1**、对深的那端 `#1e40af` **8.72:1**
+   （13 px 正文的硬线是 4.5）。🔴 **卡上所有文字一律纯白**：这一版试过用透明度做层次，
+   `opacity: 0.85` 折出来是 `#dee8fc` → **4.20:1**，连最浅的 `#e6efff` 也只有 **4.47**，
+   也就是说在这块蓝底上「灰白」必然掉到线下；层次只能靠字重与字号。
+   等级色（绿/蓝/琥珀/红）**不直接压在蓝底上**，改成白底 chip + 原等级色文字，
+   四档对白底分别量得 5.08 / 5.19 / 4.87 / 5.36。 */
 .score-card {
   display: flex;
   flex-wrap: wrap;
   gap: 18px;
   align-items: center;
-  padding: 12px 14px;
-  border: 1px solid var(--line, #d8dee4);
-  border-radius: 10px;
-  background: var(--card-bg, #fbfcfd);
+  padding: 16px 18px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #1e40af, #2563eb);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
   margin-bottom: 12px;
 }
 
@@ -90,7 +99,7 @@
 }
 
 .score-value {
-  font-size: 40px;
+  font-size: 44px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -100,12 +109,13 @@
   font-weight: 700;
   padding: 2px 10px;
   border-radius: 8px;
-  border: 2px solid currentColor;
+  background: #ffffff;
+  border: none;
 }
 
 .score-unit {
   font-size: 13px;
-  opacity: 0.65;
+  color: #ffffff;
 }
 
 .score-main[data-grade="A"] .score-grade {
@@ -131,7 +141,6 @@
 
 .score-facts dt {
   font-weight: 600;
-  opacity: 0.75;
   white-space: nowrap;
 }
 
@@ -149,8 +158,9 @@
 }
 
 .chart-box {
-  flex: 1 1 320px;
+  flex: 0 1 auto;
   min-width: 280px;
+  max-width: 100%;
 }
 
 .chart-box h3 {
@@ -163,6 +173,20 @@
   height: auto;
   display: block;
   overflow: visible;
+}
+
+/* 报告面板现在横跨整行（`isochrone.css` 里 `.layout > #report`），上面那句 `width: 100%`
+   会把两张 SVG 撑到 ~600 px 见方。雷达的设计尺寸是 320 见方、柱状图是 520×260（都由 viewBox 定），
+   放大不增加任何信息、只把标签拉粗，所以 ≥769 px 各钉回设计宽度；
+   ≤768 px 不钉，让雷达继续吃满抽屉宽度（FR-106 那一轮的实测口径不变）。 */
+@media (min-width: 769px) {
+  .chart-radar {
+    width: 320px;
+  }
+
+  .chart-bar {
+    width: 520px;
+  }
 }
 
 /* 雷达图 */

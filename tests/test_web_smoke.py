@@ -25,6 +25,10 @@ CI 增一条无头冒烟（请求首页并断言关键 DOM 节点存在）」。
    断点只有一个数字真值、位移只用 `transform`、拖拽的后续事件挂在 `window` 上、
    移动端热区 ≥ 44 px。抽屉是这个仓库里唯一「DOM 不动、全靠属性与位移」的一块，
    接错一根线就是「点了没反应」，而控制台不会响。
+6. 🔴 **报告面板的桌面版式**（缺陷 #15 那一轮）：`#report` 显式横跨栅格整行、
+   两张 SVG 的钉宽只写在「抽屉断点 + 1」以上、评分卡的白字与等级色按渐变两端和纯白
+   分别重算对比度。这三条都是**看一眼就知道对不对、但改回来没有任何报错**的东西，
+   所以按声明块扫样式表来断言，而不是记住几个十六进制。
 """
 
 from __future__ import annotations
@@ -80,6 +84,11 @@ BREAKPOINT_DECL = re.compile(r"const SHEET_BREAKPOINT_PX = (\d+);")
 MOBILE_RULE = re.compile(
     r'\.page-map\[data-sheet-mode="mobile"\]\s*(?P<selectors>[^{]+)\{(?P<body>[^}]*)\}'
 )
+# --- 样式表扫描：顶层规则与媒体查询块各走一条。
+# 依赖的是这个仓库的排版约定 —— 顶层选择器顶格、媒体查询里的规则一律缩进两格。
+# 于是 `^[^\s@]` 只会抓到顶层规则（`@` 先排掉 `@media` 本身），缩进的那些留给 css_media_block()。
+TOP_RULE = re.compile(r"(?m)^(?P<selectors>[^\s@{}][^{]*)\{(?P<body>[^{}]*)\}")
+MEDIA_BLOCK = re.compile(r"(?m)^@media(?P<query>[^{]*)\{(?P<body>.*?)^\}", re.DOTALL)
 
 
 def strip_html_comments(text: str) -> str:
@@ -502,6 +511,32 @@ def sheet_rule(selector: str) -> str:
             stripped = re.sub(r'^\.page-map\[data-sheet-mode="mobile"\]\s*', "", item.strip())
             if stripped == selector:
                 return match["body"]
+    return ""
+
+
+def css_rules(path: Path) -> dict[str, str]:
+    """把一张样式表扫成「顶层选择器 → 声明块」。
+
+    键是压掉换行与多余空白的选择器（分组选择器原样留着逗号，整条进来），
+    所以取值用等值查而不是子串搜 —— `.chart-box` 不会误命中 `.chart-box h3`。
+    媒体查询里的规则一律缩进，不进这张表：要看钉宽度那种「只许出现在某条查询里」的规则，
+    请用 `css_media_block()`。
+    """
+    css = strip_css_comments(path.read_text(encoding="utf-8"))
+    return {" ".join(match["selectors"].split()): match["body"] for match in TOP_RULE.finditer(css)}
+
+
+def css_media_block(path: Path, query: str) -> str:
+    """取条件里含 `query` 那段媒体查询的整块内容（含它内部的规则），找不到返回空串。
+
+    条件写法（`and` / 空格）先压成单空格再比，所以调用方给 `(min-width: 769px)` 这种
+    规范化形态。块的结束靠「顶格的 `}`」判定，与上面那套排版约定是一对。
+    """
+    css = strip_css_comments(path.read_text(encoding="utf-8"))
+    needle = " ".join(query.split())
+    for match in MEDIA_BLOCK.finditer(css):
+        if needle in " ".join(match["query"].split()):
+            return match["body"]
     return ""
 
 
@@ -1098,3 +1133,89 @@ def test_png_card_ink_passes_aa_on_the_card() -> None:
     for name, color in got.items():
         ratio = wcag_ratio(color, bg[1])
         assert ratio >= 4.5, f"{name} {color} 对 {bg[1]} 只有 {ratio:.2f}:1，卡片正文不过 AA"
+
+
+# --------------------------------------------------------------------------------------
+# 报告面板的桌面版式：横跨整行、钉宽只在桌面、评分卡纯白字
+# --------------------------------------------------------------------------------------
+def test_report_panel_spans_the_whole_desktop_grid_row() -> None:
+    """`.layout` 有三条轨道、四个子项，`#report` 必须显式横跨整行。
+
+    缺陷 #15 的实测形状（1280 视口、mock、关缓存、交道口样例 48 条）：不写这条时面板落在
+    第 2 行第 1 列，宽度取 `minmax(260px, 300px)` 的上限 **300 px**，右边两格空着；
+    九列的 POI 表在 270 px 的内容宽度里要滚 **600 px**，一行撑到 79 px 高。
+    横跨整行之后同一张表 1195 / 1195（不用滚）、一行 26 px。
+
+    这条断言守的是「改回去完全没有症状」那一类：栅格少一行声明，页面照样渲染、
+    脚本照样跑、接口照样 200，只是报告永远挤在左上角一条里。
+    """
+    rules = css_rules(ISOCHRONE_CSS)
+    decl = rules.get(".layout > #report")
+    assert decl, "`.layout > #report` 规则不见了：报告面板又会掉回栅格第 1 列，被压成 300 px 宽"
+    assert "grid-column: 1 / -1" in decl, decl
+    # 这条只对三栏那一段有意义。移动端抽屉里 `#report` 是 `position: fixed` 的层，
+    # 谁要是把 `grid-column` 抄进那条规则，等于在抽屉里再排一次栅格 —— 没有效果，只有困惑。
+    mobile = sheet_rule("#report")
+    assert mobile, "找不到移动端抽屉的 #report 规则"
+    assert "grid-column" not in mobile
+
+
+def test_chart_width_caps_bind_only_above_the_drawer_breakpoint() -> None:
+    """雷达 320 / 柱状 520 两个钉值只能写在「抽屉断点 + 1」以上。
+
+    面板横跨整行之后 `.chart { width: 100% }` 会把两张 SVG 一起拉到 **589 px**（实测），
+    放大不增加任何信息、只把标签拉粗，所以桌面钉回 viewBox 的设计尺寸。
+    🔴 但钉值不能漏到 ≤768 px：抽屉只有 375 px 宽，520 的柱状图会直接顶出面板，
+    而雷达也不再吃满抽屉（FR-106 那一轮实测的口径是雷达 346 = 抽屉内容宽度）。
+    下界必须是「抽屉断点 + 1」：768 这个数字只有 `isochrone.js` 一个真值，这里跟着它算。
+    """
+    declared = BREAKPOINT_DECL.search(strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8")))
+    assert declared, "isochrone.js 里没有 `const SHEET_BREAKPOINT_PX = …`"
+    px = int(declared.group(1))
+    block = css_media_block(REPORT_CSS, f"(min-width: {px + 1}px)")
+    assert block, f"找不到 @media (min-width: {px + 1}px) —— 两个钉值写进哪条查询了？"
+    top = css_rules(REPORT_CSS)
+    for kind, want in (("chart-radar", "320px"), ("chart-bar", "520px")):
+        hit = re.search(rf"^\s*\.{kind}\s*\{{(?P<body>[^}}]*)\}}", block, re.MULTILINE)
+        assert hit, f".{kind} 没有写在 @{px + 1} 这条查询里"
+        assert f"width: {want};" in hit["body"], hit["body"]
+        assert f".{kind}" not in top, f".{kind} 又多了一条顶格规则，抽屉里也会被套上钉值"
+
+
+def test_score_card_text_passes_aa_against_its_own_background() -> None:
+    """评分卡的白字对**渐变两端**都要过 AA，等级色对 chip 的白底也要过。
+
+    数字是本轮的实测：纯白对浅端 `#2563eb` 5.17、对深端 `#1e40af` 8.72；
+    当时试过用透明度做层次，`opacity: 0.85` 折出 `#dee8fc` → **4.20**、
+    最浅的 `#e6efff` 也只有 **4.47**，都掉到 13 px 正文的 4.5 线下，所以卡上文字
+    一律纯白、层次只留字重与字号。等级色不直接压在蓝底上，改成白底 chip + 原色文字，
+    四档对白底 5.08 / 5.19 / 4.87 / 5.36。
+
+    断言从声明块里现取十六进制再算，不写死数字：换一根渐变棒就重算，
+    「改得好看不等于改得能读」这条得由机器说。
+    """
+    rules = css_rules(REPORT_CSS)
+    card = rules.get(".score-card")
+    assert card, "找不到 .score-card"
+    stops = re.search(
+        r"linear-gradient\([^,]+,\s*(#[0-9a-fA-F]{6}),\s*(#[0-9a-fA-F]{6})\s*\)", card
+    )
+    assert stops, ".score-card 的底不再是两端可解析的渐变，这条断言失去比对对象"
+    ink = re.search(r"(?m)^\s*color:\s*(#[0-9a-fA-F]{6});", card)
+    assert ink, ".score-card 上没有纯色前景"
+    for stop in stops.groups():
+        ratio = wcag_ratio(ink[1], stop)
+        assert ratio >= 4.5, f"{ink[1]} 对渐变端 {stop} 只有 {ratio:.2f}:1，卡上正文不过 AA"
+    # 层次一旦用 `opacity` 做，实际前景就不是那个十六进制了 —— 上面的比对随之作废。
+    for selector in (".score-card", ".score-unit", ".score-facts dt", ".score-facts dd"):
+        assert "opacity" not in rules[selector], f"{selector} 又用回 opacity，白字会掉到线下"
+    chip = rules[".score-grade"]
+    bg = re.search(r"(?m)^\s*background:\s*(#[0-9a-fA-F]{6});", chip)
+    assert bg, "等级 chip 的底不是可解析的十六进制"
+    for grade in "ABCD":
+        rule = rules.get(f'.score-main[data-grade="{grade}"] .score-grade')
+        assert rule, f"等级 {grade} 的文字色规则不见了"
+        color = re.search(r"(#[0-9a-fA-F]{6})", rule)
+        assert color, f"等级 {grade} 的文字色不是可解析的十六进制"
+        ratio = wcag_ratio(color[1], bg[1])
+        assert ratio >= 4.5, f"等级 {grade} 的 {color[1]} 对 chip 底 {bg[1]} 只有 {ratio:.2f}:1"

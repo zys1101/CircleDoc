@@ -80,6 +80,15 @@
   padding: 16px 20px 8px;
 }
 
+/* `.layout` 有**三个轨道但有四个子项**（参数 / 舞台 / 读数 / 报告），所以 `#report` 会掉到
+   第 2 行第 1 列、被 `minmax(260px, 300px)` 压成 300 px 宽，而同一行右边那一格空着。
+   报告里有九列的 POI 表，本来就需要整幅宽度，所以让它横跨最后一行而不是挤进第三列。
+   ≤ 1100 px 时 `.layout` 已经是单列，这条不改变任何东西；移动端抽屉里 `#report`
+   走 `position: fixed`，也不受它影响。 */
+.layout > #report {
+  grid-column: 1 / -1;
+}
+
 .panel {
   padding: 14px;
   border: 1px solid var(--line);

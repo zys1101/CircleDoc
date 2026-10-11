@@ -8,7 +8,7 @@
 | 技术栈 | Python 3.11 + FastAPI 后端 · 零构建链原生 HTML/CSS/JS 前端 · SQLite 运行时缓存 · Docker 一键部署 |
 | 地图依赖 | 百度地图开放平台 Web 服务 API + JSAPI 4.0（浏览器端，按需动态注入、可降级） |
 | 事实依据 | 配额、接口路径、参数名、状态码、条款判定**一律以 [`docs/BAIDU_API_NOTES.md`](docs/BAIDU_API_NOTES.md) 为唯一出处**（2026-10-04 逐接口核验官方文档所得）；架构与需求见 [`PRD.md`](PRD.md) |
-| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（506 例单测 + 对比实验 + 诚实登记的未验证项） |
+| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（509 例单测 + 对比实验 + 诚实登记的未验证项） |
 | 部署细节 | [`tools/README-deploy.md`](tools/README-deploy.md)（Dockerfile / compose / run 脚本的设计取舍） |
 | 开源协议 | [Apache License 2.0](LICENSE) |
 | 最后更新 | 2026-10-11 |
@@ -118,7 +118,7 @@ python -m venv .venv
 ### 2.4 本地校验（零 AK、零出网）
 
 ```bash
-pytest -q                                              # 506 例（实测，零配置 / 零 AK / 零出网）
+pytest -q                                              # 509 例（实测，零配置 / 零 AK / 零出网）
 python -c "from services.poi_categories import assert_wordlist; assert_wordlist()"
 python tools/gen_samples.py --check                     # 合成样例基线校验
 ruff check . && black --check .                         # 零告警
@@ -130,6 +130,14 @@ node tools/map_layers_smoke.mjs _map_input.json         # 地图两个叠加图�
 > 而 `grep -c 'OK '` 照样返回一个数（`0`）。这一条是 `docs/TEST_REPORT.md` §2.11 用一次假数字换来的。
 > 另外 Windows 上请用 `./.venv/Scripts/python.exe -m pytest`：直接敲 `pytest` 会落到没装 `fastapi` 的解释器上，
 > 整个文件在**收集阶段**就报错、一个用例都不跑。
+
+🔴 **但「509 例全绿」不代表基线可复现**（2026-10-11 实测，登记为未修）：在跑过 live、
+`data/cache.db` 里留着真实 POI 的开发机上，`pytest tests/test_samples_baseline.py` **单独跑必红**
+（`assert 67.8 == 98.24`，就是上面第 3 步那对污染数字），全量跑却是绿的——因为排在它前面的文件
+替换了进程级缓存单例。三条对照命令与机理写在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.20 末。
+临时口径（实测）：`CACHE_ENABLED=false pytest tests/test_samples_baseline.py` → **16 passed**。
+CI 那侧没有这个污染源（仓库不签入 `data/cache.db`、缓存库惰性建、镜像内不得预置 `.db`），
+**但这是按代码与仓库内容推的，本轮没在 CI 上单独验这一条**。
 
 > 上表的用例数是**本文写作时实测**。逐文件的分项清单与各自覆盖的需求见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §1；该文件是测试口径的唯一出处，本文不重复维护那份明细（避免两处失同步）。
 
@@ -562,7 +570,7 @@ PRD §10-6：**演示现场的网络状况无法提前得知**，因此必须准
 | --- | --- | --- |
 | 1 | **不配 AK**（或把 `DATA_MODE=mock`） | 首屏自动挂横幅「实时服务不可用，当前为离线报告模式」；**不出现红色报错** |
 | 2 | 打开 `/isochrone.html` | 地图区域降级为**我方合成的 SVG 示意图**，标注「**离线示意图，非真实地图**」（R13：JSAPI 运行时与瓦片**无法**本地化，官方无离线瓦片方案） |
-| 3 | 依次跑三个样例 | 98.24 A / 80.97 B / 44.65 D，盲区面积 3.53 % / 26.33 % / 97.12 % —— **三型差异肉眼可辨**（2026-10-10 坐标核验后的新基线，`python tools/gen_samples.py --check` 可复现） |
+| 3 | 依次跑三个样例 | 🔴 **前提：起服务时带 `CACHE_ENABLED=false`**——`data_mode=mock` 只表示「不出网」，不表示「不读缓存」，本机 `data/cache.db` 里留着 live 轮次的真实 POI 时，mock 会先读缓存再合成，屏幕上的分数就不是基线了（2026-10-11 实测同一 payload：开缓存 **67.8 C** / 盲区 47.63 % / 69 条，关缓存 **98.2 A** / 3.53 % / 48 条；原因与理由写在 `tools/gen_samples.py:90`）。关缓存后在浏览器里点三次「一键体检」：**98.2 A / 81.0 B / 44.6 D**，盲区 **3.53 % / 26.33 % / 97.12 %**，返回 **48 / 14 / 23** 条——评分卡按 `toFixed(1)` 显示，所以看到的就是基线 98.24 / 80.97 / 44.65（`python tools/gen_samples.py --check` 可复现，三型差异肉眼可辨） |
 | 4 | 看报告与图表 | 评分卡 / 雷达图 / 柱状图 / 明细表 / 盲区清单**全部可用**（雷达图与柱状图是手绘 SVG，零外部依赖） |
 | 5 | 看计量 | 三栏计量**如实为 0**（合成层不发出网请求，就不该在配额对账单上记下没发生过的消耗） |
 
@@ -572,7 +580,7 @@ PRD §10-6：**演示现场的网络状况无法提前得知**，因此必须准
 
 > ⚠️ **口径纪律**：断网时**地图不可用是官方架构决定的既成事实**（JSAPI 运行时与地图瓦片均由百度服务器动态下发，无法 vendored），不是工程缺陷。因此本项目**不承诺「断网也能演示地图」**——正确表述是「**断网演示 = 完整报告 + 图表 + 合成示意图**；地图演示需现场可访问 `api.map.baidu.com`」。
 >
-> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（506 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
+> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（509 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
 
 ---
 
@@ -770,14 +778,15 @@ ECharts 官方**只发整包**，没有「只含 radar + bar」的官方 thin bu
 | `isochrone.js` | 139.5 KB |
 | `report.js` | 62.6 KB |
 | `isochrone.html` | 23.6 KB |
-| `isochrone.css` | 21.1 KB |
+| `isochrone.css` | 21.7 KB |
 | `app.js` | 7.8 KB |
-| `report.css` | 7.3 KB |
+| `report.css` | 8.7 KB |
 | `app.css` | 4.4 KB |
 | `index.html` | 3.8 KB |
-| **合计** | **270.2 KB** |
+| **合计** | **272.1 KB** |
 
-实际占用仅为预算的 **54 %**（上表 **2026-10-11** 按 `wc -c / 1024` **重测**）。
+实际占用仅为预算的 **54 %**（上表 **2026-10-11** 按 `wc -c / 1024` **重测**；同一天里因为
+桌面版式那一轮又加了注释与两条媒体查询，`isochrone.css` +0.6 KB、`report.css` +1.4 KB）。
 ⚠️ 这张表此前一直停在 FR-106/107 那一轮的 **235.7 KB / 47 %**，而后面四轮（FR-103 地址回显、
 FR-108 联想、FR-413 页脚、FR-305 PNG）都在往同一批文件里加代码，谁都没回来改这个数——
 差额 **34.5 KB** 里 `isochrone.js` 占 15.1 KB、`report.js` 占 12.9 KB。登记在
@@ -787,7 +796,7 @@ FR-108 联想、FR-413 页脚、FR-305 PNG）都在往同一批文件里加代�
 文档链接，不在其列——页脚那两条官方隐私政策与服务条款链接就属于这一类。口径细化过程见
 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.17）。
 
-> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（**59 例**，2026-10-11 由 `--collect-only` 实测），它把 `web/report.js`（**27 个**）与 `web/isochrone.js`（62 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在（`isochrone.html` 去重后 **97 个**），并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
+> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（**62 例**，2026-10-11 由 `--collect-only` 实测），它把 `web/report.js`（**27 个**）与 `web/isochrone.js`（62 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在（`isochrone.html` 去重后 **97 个**），并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
 
 ### 10.5 🔴 前 K 实测用了分层选择，而非 §4.3 字面的全局最近 K
 
@@ -848,7 +857,7 @@ PRD §4.3 第 4 条写的是「圈内 + **直线距离最近的前 K 个**」，
 | 🔴 **FR-103 地址行的「成功态」是打桩验的，不是真实 `live`** | 零出网下跑了四例：真实服务端 `mock` 空态（`request_id 33437b90d2c548b5`，响应体 `http_requests=0`）、同坐标重复取点**只发一次**请求（Network 面板 1 条 `/api/regeo`）、连点换点时慢响应被世代号丢弃、断网失败态文案与警示色。**成功态那一行是把 `window.fetch` 换成返回真实响应形状的桩**再量的（`data-state="ok"`、五枚字段徽标、375 宽下换行不溢出）。真实 `live` 的一跳要用掉 300 次/日逆地理配额里的 1 次，按配额纪律**等用户点头才跑**；后端 `live` 分支的形状与「不切文本」由 `tests/test_geo_api.py`（本轮 16 → 27 例，真实 `BaiduClient` + `httpx.MockTransport`）钉住 |
 | 🔴 **FR-108 联想的候选列表是打桩验的，`/place/v2/suggestion` 的真实报文从未核对过** | 零出网下跑了七例：默认关闭时**开关不勾就零请求**（Network 面板只有 boot 期 3 条）、两个本地门槛（< 3 字 / 缺城市）各自出文案且零请求、真实一跳打到本地 `mock` 后端（`reqid=10`，`x-http-requests: 0`、`x-place-calls: 0`）、`window.fetch` 打桩后量候选渲染 / 点选落点 / 键盘四键 / 前端缓存命中不再发 / 换城市重问 / 世代号丢掉慢响应。**没验的三件**：① 真实 `live` 一跳要烧「地点输入提示与检索共用 100 次/日」池子里的 1 次，等用户点头；② `flyTo` 在无浏览器 AK 的机器上跑不了，只留了 `panTo` 退路与 `typeof` 守卫；③ `_parse_suggest` 的字段名按笔记 §2.4 写，**该节本身没记返回体形状**，`tests/test_geo_api.py` 用的是自造桩件——真字段名要等 live 那一跳核对。逐条证据见 `docs/shots/README-isochrone-acceptance.md` 的「FR-108 地址联想」一节 |
 | 🔴 **新发现，未修**：live 等时圈的 `body.usage` 比服务端请求级计量少记 1 次 / 4 条 | 同一次 `POST /api/isochrone`：响应体 `usage` 是 `quota_units=40 / http_requests=6 / batches_sent=6`，服务端同一 `request_id` 的 `http_request` 日志是 `quota_units=44 / http_requests=7`。差值恰好等于一个批次，方向是**少报**（真实花费 ≥ 报告值），所以 §6.1 的预算断言偏乐观。只影响 live 的等时圈路径（mock 层两账本同源，冒烟自测抓不到）。**尚未定位到具体是哪一批没并进 `ProbeTally`**，登记为待办而不是文档口径 |
-| 🔴 **新发现，未修**：桌面三栏下报告面板 `#report` 被栅格压成 300 px 宽 | 1280×800 实测：`.layout` 是 `minmax(260px,300px) minmax(0,1fr) minmax(280px,360px)` 三列，而 `#report` 是**第 4 个自动放置的子项**，掉到第 2 行第 1 列，宽度只有 300 px。后果是它里面那张九列 POI 表在桌面机上要横向滚动（`.table-wrap` `clientWidth 270 / scrollWidth 600`）、首个数据行被折成 **79 px** 高、面板总高 **7341 px**（整页 12552 px），而它右侧 541 px 那一列在同一行是空的；雷达图只剩 280×280，柱状图把 520×260 的 viewBox 等比压扁。`grep -c grid-column` 在初始提交 `f24a174` 上就是 **0**——**与移动端抽屉无关，从第一天就在**。不是一行能改完：撑成全宽后 `.chart { width: 100% }` 没有 `max-width`，雷达会涨到 ~600×600，得连 `.chart-box` 一起定口径再重测 1280 / 900 / 375 三档。逐条数字见 [`docs/shots/README-isochrone-acceptance.md`](docs/shots/README-isochrone-acceptance.md) 的「FR-107 档位显式化」一节 §5 |
+| ✅ **桌面三栏下报告面板 `#report` 被栅格压成 300 px 宽**（2026-10-11 修） | 缺陷形状从第一天就在：`.layout` 声明**三条轨道**（`minmax(260px,300px) minmax(0,1fr) minmax(280px,360px)`）却有**四个子项**，`#report` 作为第 4 个被自动放到第 2 行第 1 列，宽度取第一轨上限 **300 px**，同一行右边那一整格空着。1280×800 实测（mock、`CACHE_ENABLED=false`、交道口样例返回 48 条）：九列 POI 表在 **270 px** 的内容宽度里要滚 **600 px**、首行被折成 **79 px** 高、雷达只剩 280×280。`grep -c grid-column` 在初始提交 `f24a174` 上就是 **0**——与移动端抽屉无关。🔴 **不是一行能改完**（同一份数据、靠注入 `<style>` 逐条中和量出来的中间态，不是跑三次）：只加 `.layout > #report { grid-column: 1 / -1 }` → 面板 1225×3913，但 `.chart { width: 100% }` 立刻把雷达和柱状一起拉到 **589**，放大不增加任何信息、只把标签拉粗；再补一条 `@media (min-width: 769px)` 把两张 SVG 钉回 viewBox 设计尺寸 → 1225×3644、雷达 **320×320**、柱状 **520×260**、表 **1195 / 1195（不用滚）**、首行 **26 px**、页面横向溢出 `scrollWidth − innerWidth = −15`。钉值的下界是**抽屉断点 + 1**（由 `SHEET_BREAKPOINT_PX` 推，样式表里不另抄一个 768）：≤768 不钉，雷达在抽屉里继续吃满 **346**。四档复测：**769**（最窄桌面）面板 714、两块图换行堆叠、柱状右沿距面板还剩 180 px、表 685 / 685 不滚；**1082**（单列）加不加这条**逐字节相同**（1027 宽 / 3769 高 / 表 998 / 无溢出，**no-op 已验**）；**1122**（三栏）面板 1067；**375×667** 抽屉未受影响（`#report` 仍 `position: fixed`、top 175 / 高 440 / `overflow-y: auto`，把手热区 79 × 44，`.page-foot` 仍在抽屉之外的 `contentinfo`）。三条静态断言已进 `tests/test_web_smoke.py`（栅格横跨整行、钉值只许出现在 769 那条查询里且下界跟着 JS 常量走、评分卡白字对**渐变两端**与等级色对 chip 白底现取十六进制重算 AA），四条改坏的路径各自实测**能测红**。逐条数字见 [`docs/shots/README-isochrone-acceptance.md`](docs/shots/README-isochrone-acceptance.md) 的「桌面报告版式与评分卡」一节 |
 | 🔴 **页脚审图号会过期，且这条没有自动守卫** | `GS(2025)4125` 与 `甲测资字11111342` 是 **2026-10-11 从 `lbsyun.baidu.com` 首页页脚的文本节点实读**（不是凭记忆抄的），百度按年换号，号码本身必然过期。TTL 那三个数字有自动守卫（`test_compliance_footer_ttl_matches_config` 直接对着 `Settings.model_fields` 的默认值断言，配置一改页面就红），**审图号没有可对照的机器可读来源**——自动化只能核对「本页有没有这一行」，核对不了「这一行还是不是官方那个号」。所以页脚在号码旁边带了读取日期，并把**季度人工复核**登记为唯一的兜底；换号时改 `web/isochrone.html` 的 `.foot-review` 一处、同步 `docs/BAIDU_API_NOTES.md` § 对应条目与本节 |
 | ✅ **FR-305 的报告卡 PNG 已落地**（2026-10-11），但**「live 底图能不能截」这件事仍未实测** | 四条出口现在是 JSON 一份 + CSV 两份 + **PNG 一张**（`web/report.js` 的 `exportPng`）。已核两半：① **我方矢量这条路通了**——雷达与柱状图由 `svgNode()` 建出，克隆 SVG → `data:image/svg+xml` → `Image` → `canvas.drawImage` → `toBlob`，浏览器实测 `1 800 × 2 584 px`、`image/png`、**670 295 字节**（页面提示同一数写作「约 655 KB」），真实按钮路径从点下到 `<a download>` 被点 **89 ms**，**同一份报告连跑 4 次字节数完全一致**；两张图都以位图形式真的画进了卡片（`drawImage` 收到 2 个 `IMG`，本征 `640×640` 与 `1688×844` = 逻辑 `320×320` / `844×422` 各乘 `PNG_SCALE 2`）。② **live 底图那一半仍未验**：JSAPI 把瓦片画进它自己的 `<canvas>`，图源跨域且无 CORS 响应头，按规范 `toDataURL()` 应抛 `SecurityError`——这条**只有代码依据**。验它要在有真实 `BAIDU_BROWSER_AK` 的机器上开一次 live 底图，那次加载要烧 JSAPI 浏览器端配额，按配额纪律**等用户点头**。所以卡片**刻意不去碰底图画布**（`tests/test_web_smoke.py` 有一条断言钉住 `toDataURL` 在**剥掉注释后的 `report.js` 代码里**出现 **0** 次——原始文件里那唯一 1 次是第 958 行解释「为什么不能截底图」的注释），条款 6.6 的标识由文字带满足：6.6 要的是「保留标识」，不是「导出品必须是那张在线瓦片图」。`静态图` API 作为备选同样返回跨域位图，绕不开这个判定。🔴 还有一条小尾巴：本轮把 `<a download>` **拦下来**量的 blob，**文件没有真的落盘**（刻意不往你的下载目录写），「双击打开看到的就是这张卡」需要人在浏览器里点一次按钮才算验完 |
 | **DevTools Network offline 下的全链路降级** | 本环境无网络拦截工具，只跑了代码审读与真实失败出口调用（现在有 AK，可用 `DATA_MODE=mock` 或停服务复现同一条降级出口） |
