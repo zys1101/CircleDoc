@@ -70,7 +70,8 @@
   font-size: 13px;
 }
 
-/* 桌面三栏：参数 / 地图 / 读数。窄屏改纵向堆叠（FR-106 的抽屉形态是 M4 的活）。 */
+/* 桌面三栏：参数 / 地图 / 读数。窄屏（769~1100 px，以及移动端无 JS 的降级路径）改纵向堆叠；
+   ≤ 768 px 且有脚本时，三块面板改由文末 FR-106 的底部抽屉接管。 */
 .layout {
   display: grid;
   grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(280px, 360px);
@@ -639,5 +640,226 @@ table.vertices td.sample.sample-blocked_timeout div:first-child {
   select,
   .page-map button {
     min-height: 44px; /* FR-106：点击热区 ≥ 44 px */
+  }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   FR-106 移动端底部抽屉（≤ 768 px）
+
+   三条与实现绑定的口径，改样式前先读：
+
+   1. **开关是 `body[data-sheet-mode="mobile"]`，不是媒体查询。** 这个属性由 `isochrone.js` 按
+      `matchMedia("(max-width: 768px)")` 写，于是「断点在哪」全项目只有一处真值（JS 里那个 768）。
+      副作用是**无 JS 时抽屉不出现**，三块面板回到正常流里堆叠——这是刻意的降级：
+      抽屉的意义是「地图占满首屏 + 面板浮在下方」，没有脚本就没人管浮层，硬摆一个
+      `translateY(100%)` 的面板等于把参数与报告**永久藏到屏幕外**。
+   2. **位移只用 `transform: translateY()`**（R15 的工程措施：不引第三方滑动库），
+      收起态是 `calc(100% + var(--sheet-bar-h))`——多出把手条那一段，是为了让面板连自己
+      的圆角顶边都不露，否则 1  px 的残边会被读成「有个东西被切住了」。
+   3. **一次只开一块面板**，把手条三个按钮就是唯一的切换入口，`aria-expanded` 由 JS 同步。
+      三块面板都 `position: fixed` 叠在同一个底边，同时开会互相盖住，
+      所以「开谁」这个状态必须只有一个值，而不是三个独立布尔。
+   --------------------------------------------------------------------------------------------- */
+
+.sheet-bar {
+  display: none;
+}
+
+.page-map[data-sheet-mode="mobile"] {
+  --sheet-bar-h: 52px;
+  --sheet-max-h: 66vh;
+  padding-bottom: calc(var(--sheet-bar-h) + 16px);
+}
+
+.page-map[data-sheet-mode="mobile"] .layout {
+  display: block;
+  padding: 8px 10px 0;
+}
+
+/* 🔴 首屏要让给地图，所以页头/横幅/配额条在移动端必须压扁。这组数值不是拍出来的：
+   375×667 上按桌面版式实测是 `.page-head` 227 px + `.banner` 210 px + `#legend` 640 px，
+   地图被挤到只剩 240 px，等于「抽屉做好了但地图不占满首屏」。全部限定在
+   `[data-sheet-mode="mobile"]` 里，桌面板式一个字节都不动。 */
+.page-map[data-sheet-mode="mobile"] .page-head {
+  padding: 10px 12px 8px;
+}
+
+.page-map[data-sheet-mode="mobile"] .page-head h1 {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+/* 标语是重复信息，但「← 返回首页」是移动端唯一的导航入口：只藏 span，不藏整段。 */
+.page-map[data-sheet-mode="mobile"] .sub {
+  margin: 2px 0 8px;
+  font-size: 12px;
+}
+
+.page-map[data-sheet-mode="mobile"] .sub span {
+  display: none;
+}
+
+/* 徽标本来就是 inline-flex；缩到 11 px 才可能并排落在同一行，掉到第二行就是白挤 20 px。 */
+.page-map[data-sheet-mode="mobile"] .mode,
+.page-map[data-sheet-mode="mobile"] .engine {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.page-map[data-sheet-mode="mobile"] .engine {
+  margin-left: 6px;
+}
+
+/* 横幅 / 配额条可能写得很长的解释文本：封顶后让它内部滚动，而不是把地图顶出首屏。 */
+.page-map[data-sheet-mode="mobile"] .banner,
+.page-map[data-sheet-mode="mobile"] .notice {
+  max-height: 24vh;
+  margin: 8px 10px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.page-map[data-sheet-mode="mobile"] .banner h2,
+.page-map[data-sheet-mode="mobile"] .notice h2 {
+  font-size: 13px;
+}
+
+.page-map[data-sheet-mode="mobile"] .banner p,
+.page-map[data-sheet-mode="mobile"] .banner li,
+.page-map[data-sheet-mode="mobile"] .notice p {
+  font-size: 12px;
+}
+
+/* 图例在首屏之下、靠滚动才看到，**不参与**地图高度计算；这里只做轻度压缩，免得整页拉得过长。 */
+.page-map[data-sheet-mode="mobile"] .legend {
+  margin-top: 8px;
+  padding: 8px;
+  font-size: 11px;
+}
+
+.page-map[data-sheet-mode="mobile"] .legend-list,
+.page-map[data-sheet-mode="mobile"] .sample-list {
+  gap: 4px 10px;
+}
+
+/* FR-106 热区：勾选框本体只有 18 px，但整行 `<label class="check">` 才是原生点击目标，
+   所以「撑到 44 px」必须作用在行上而不是 input 上。`align-items` 一起改成 center，
+   否则 44 px 高的行里那个 18 px 的框会顶在上沿，看着像按不准。 */
+.page-map[data-sheet-mode="mobile"] .check,
+.page-map[data-sheet-mode="mobile"] #categories .check {
+  align-items: center;
+  min-height: 44px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.page-map[data-sheet-mode="mobile"] .check input {
+  width: 22px;
+  height: 22px;
+  margin-top: 0;
+}
+
+/* 可点的文字链接也是热区：`.back`（返回首页）与页脚三条链接本质是移动端的导航，
+   行高只有 ~16 px 就是按不准的东西。用 `inline-flex + min-height` 而不是加 padding，
+   因为垂直 padding 会把基线推歪、字看起来往下掉。 */
+.page-map[data-sheet-mode="mobile"] .back,
+.page-map[data-sheet-mode="mobile"] .page-foot a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.page-map[data-sheet-mode="mobile"] .page-foot a {
+  padding: 0 6px;
+}
+
+/* 地图占满首屏：可用高度由 JS 量出（视口 − stage-area 的上边界 − 把手条），CSS 只兜一个比例值。 */
+.page-map[data-sheet-mode="mobile"] .stage-area {
+  height: var(--map-h, 56vh);
+}
+
+.page-map[data-sheet-mode="mobile"] #controls,
+.page-map[data-sheet-mode="mobile"] #readout,
+.page-map[data-sheet-mode="mobile"] #report {
+  position: fixed;
+  z-index: 20;
+  right: 0;
+  bottom: var(--sheet-bar-h);
+  left: 0;
+  max-height: var(--sheet-max-h);
+  margin: 0;
+  padding: 16px 14px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-color: var(--line);
+  border-width: 1px 1px 0;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -10px 26px rgba(16, 20, 28, 0.18);
+  transform: translateY(calc(100% + var(--sheet-bar-h)));
+  transition:
+    transform 0.2s ease-out,
+    visibility 0s linear 0.2s;
+  visibility: hidden;
+}
+
+.page-map[data-sheet-mode="mobile"][data-sheet-open="controls"] #controls,
+.page-map[data-sheet-mode="mobile"][data-sheet-open="readout"] #readout,
+.page-map[data-sheet-mode="mobile"][data-sheet-open="report"] #report {
+  transform: translateY(0);
+  visibility: visible;
+  transition: transform 0.2s ease-out;
+}
+
+/* 拖拽中：位移由 JS 逐帧写在 style.transform 上，所以这里必须关掉过渡，否则手感是「黏的」。 */
+.page-map[data-sheet-mode="mobile"] .sheet-dragging {
+  transition: none;
+}
+
+.page-map[data-sheet-mode="mobile"] .sheet-bar {
+  position: fixed;
+  z-index: 21;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  height: var(--sheet-bar-h);
+  padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+  background: var(--card);
+  border-top: 1px solid var(--line);
+}
+
+.page-map[data-sheet-mode="mobile"] .sheet-tab {
+  flex: 1;
+  min-height: 44px; /* 热区 ≥ 44 px：把手条就是移动端唯一的导航 */
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.page-map[data-sheet-mode="mobile"] .sheet-tab[aria-expanded="true"] {
+  color: var(--accent, #2d5f8f);
+  border-color: currentColor;
+}
+
+.page-map[data-sheet-mode="mobile"] .sheet-grip {
+  flex: 0 0 104px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+  touch-action: none; /* 否则拖拽会被浏览器判成纵向滚动，pointermove 直接不发 */
+}
+
+/* R15：模拟不出真实手指惯性，但「动效致晕」这条是无条件的。 */
+@media (prefers-reduced-motion: reduce) {
+  .page-map[data-sheet-mode="mobile"] #controls,
+  .page-map[data-sheet-mode="mobile"] #readout,
+  .page-map[data-sheet-mode="mobile"] #report {
+    transition: none;
   }
 }

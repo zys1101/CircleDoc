@@ -8,7 +8,7 @@
 | 技术栈 | Python 3.11 + FastAPI 后端 · 零构建链原生 HTML/CSS/JS 前端 · SQLite 运行时缓存 · Docker 一键部署 |
 | 地图依赖 | 百度地图开放平台 Web 服务 API + JSAPI 4.0（浏览器端，按需动态注入、可降级） |
 | 事实依据 | 配额、接口路径、参数名、状态码、条款判定**一律以 [`docs/BAIDU_API_NOTES.md`](docs/BAIDU_API_NOTES.md) 为唯一出处**（2026-10-04 逐接口核验官方文档所得）；架构与需求见 [`PRD.md`](PRD.md) |
-| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（451 例单测 + 对比实验 + 诚实登记的未验证项） |
+| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（459 例单测 + 对比实验 + 诚实登记的未验证项） |
 | 部署细节 | [`tools/README-deploy.md`](tools/README-deploy.md)（Dockerfile / compose / run 脚本的设计取舍） |
 | 开源协议 | [Apache License 2.0](LICENSE) |
 | 最后更新 | 2026-10-11 |
@@ -115,12 +115,18 @@ python -m venv .venv
 ### 2.4 本地校验（零 AK、零出网）
 
 ```bash
-pytest -q                                              # 451 例（实测，零配置 / 零 AK / 零出网）
+pytest -q                                              # 459 例（实测，零配置 / 零 AK / 零出网）
 python -c "from services.poi_categories import assert_wordlist; assert_wordlist()"
 python tools/gen_samples.py --check                     # 合成样例基线校验
 ruff check . && black --check .                         # 零告警
 node tools/report_dom_smoke.mjs                         # 报告面板渲染路径（需 node）
+node tools/map_layers_smoke.mjs _map_input.json         # 地图两个叠加图层（需 node + 一份响应，见 TEST_REPORT §7）
 ```
+
+> ⚠️ 两条 `node` 冒烟**要看退出码，不只看 `OK` 计数**：桩件缺一个方法时脚本会在加载阶段就死，
+> 而 `grep -c 'OK '` 照样返回一个数（`0`）。这一条是 `docs/TEST_REPORT.md` §2.11 用一次假数字换来的。
+> 另外 Windows 上请用 `./.venv/Scripts/python.exe -m pytest`：直接敲 `pytest` 会落到没装 `fastapi` 的解释器上，
+> 整个文件在**收集阶段**就报错、一个用例都不跑。
 
 > 上表的用例数是**本文写作时实测**。逐文件的分项清单与各自覆盖的需求见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §1；该文件是测试口径的唯一出处，本文不重复维护那份明细（避免两处失同步）。
 
@@ -533,7 +539,7 @@ PRD §10-6：**演示现场的网络状况无法提前得知**，因此必须准
 
 > ⚠️ **口径纪律**：断网时**地图不可用是官方架构决定的既成事实**（JSAPI 运行时与地图瓦片均由百度服务器动态下发，无法 vendored），不是工程缺陷。因此本项目**不承诺「断网也能演示地图」**——正确表述是「**断网演示 = 完整报告 + 图表 + 合成示意图**；地图演示需现场可访问 `api.map.baidu.com`」。
 >
-> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（451 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
+> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（459 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
 
 ---
 
@@ -669,15 +675,27 @@ python tools/gen_samples.py --check     # 零出网校验清单与基线一致
 | 双指缩放 | **未在真机验证**——代码只实现滚轮缩放（`wheel`，`passive:false`），**未见 pinch 处理**，触摸屏可能无法缩放 |
 | iOS Safari 滚动穿透 / 100vh 地址栏抖动 | **未在真机验证** |
 
-> 🔴 **这一节此前把 FR-106 写成「已按 §6.3 验收」，是不实陈述，现已更正**。真实的代码状态是：
+> 🔴 **这条状态两步都记在这儿，别只读后半句**：本节一度把 FR-106 写成「已按 §6.3 验收」，是**不实陈述**；2026-10-11 先就地更正为「功能未实现」，**同日实现并按 DevTools 实测回填**。真实的代码状态是：
 >
-> * **底部抽屉未实现**。`≤ 768 px` 时参数面板与报告只是**单栏堆叠**（`isochrone.css` 的 1100 px / 480 px 两个断点 + `report.css` 的 768 px 断点），不会浮成可拖拽展开/收起的抽屉，地图也**不占满首屏**——即 PRD §7「最小可演示集」里 M4b 的降级形态，而不是 FR-106 的达标形态。
-> * **两档视口走查没有留下可复现证据**。`docs/` 里搜不到 375×667 / 414×896 的任何截图或测量记录，所以「无横向滚动、无元素重叠」目前**只能算未验证的假设**，不能算验收项。
-> * **已落地的是**：点击热区 ≥ 44 px（`app.css` 给 `button` 的无条件 `min-height: 44px`，加上 `isochrone.css` 480 px 断点与 `report.css` 768 px 断点里的三处）与 FR-107 自动轻量档（`report.js:942` 用 `matchMedia("(max-width: 768px)")` 决定 `platform`，后端 `services/analysis.py:83-86` 据此把 K 从 12 降到 6 并跳过中点加密与耗时热力场，`tests/test_analysis_api.py::test_mobile_platform_halves_k_and_uses_lightweight_profile` 钉住）。
+> * **底部抽屉已落地**。移动端开关是 `body[data-sheet-mode="mobile"]`，由 `web/isochrone.js` 按 `matchMedia("(max-width: 768px)")` 写下去——于是「断点在哪」全项目只有 JS 里那**一个** 768，CSS 跟着属性走而不是自己再写一遍媒体查询。抽屉体**就是**原有的 `#controls` / `#readout` / `#report` 三块面板：DOM 不搬、不引第三方滑动库（R15 的工程措施），只做 `position: fixed` + `transform: translateY()`；一次只开一块（`data-sheet-open`），入口是把手条三个按钮、纵向拖拽、Escape。
+> * **无 JS 时抽屉不出现**，三块面板回到正常流里堆叠。这是刻意的降级而不是遗漏：硬摆一个 `translateY(100%)` 的面板等于把参数与报告**永久藏到屏幕外**。由 `tests/test_web_smoke.py::test_no_js_path_keeps_the_panels_in_normal_flow` 钉住。
+> * **两档视口实测**（Chrome DevTools 设备模拟；`ignoreCache` 重载后读 `getBoundingClientRect`，展开态等 `transition` 落定再量，值为 2026-10-11 复跑）：
 >
-> 上表三项真机行为在验收文档里**标注为「未在真机验证」而不是打勾**；FR-106 补齐后，本节要一并回填 DevTools 两档的实测证据。
+>   | 量 | 375×667 | 414×896 |
+>   | --- | ---: | ---: |
+>   | 页头 / 横幅 | 119 / 135 px | 119 / 135 px |
+>   | `.stage-area`（地图）纵向区间 | 278 → 615，**高 337 px** | 278 → 844，**高 566 px** |
+>   | 把手条 | 615 → 667（52 px） | 844 → 896（52 px） |
+>   | 展开态 `#controls` | 175 → 615（高 440，`translateY(0)`） | 253 → 844（高 591，`translateY(0)`） |
+>   | `scrollWidth / clientWidth` | **375 / 375**（无横向滚动） | **414 / 414**（无横向滚动） |
+>
+>   地图顶边 278 px = 页头 + 横幅 + 留白，**首屏剩下的整条都给地图**；面板底边与把手条顶边 `gap = 0`，圆角 `14px 14px 0 0` 朝上，未开的那两块 `visibility: hidden`。
+> * **点击热区 ≥ 44 px 是逐个元素量出来的**，不是看 CSS：`.sheet-tab` `[44, 44, 44]`、`.sheet-grip` 44、`.check` 12 行 44/45、`.back` 44、页脚链接 44。
+> * **FR-107 自动轻量档在抽屉里是跑通的**：移动端「一键体检」带 `platform:"mobile"`（`report.js` 用的 `matchMedia` 与上面那个 768 同一个数），后端据此把 K 从 12 降到 6 并跳过高成本推算；零出网口径下响应头 `x-http-requests: 0`、`x-place-calls: 0`、`x-quota-units: 0`。体检成功后结果会自动浮到地图上方（`window.CircleDocMap.openSheet("report")`），否则手机上「一键体检」看起来就是死的。
+>
+> 上表**三项真机行为仍标注为「未在真机验证」而不是打勾**——抽屉这轮只证明它在 DevTools 模拟下按预期工作，证明不了真机手感；双指缩放更是**至今没有实现**（下表第 2 行）。
 
-工程上的降风险措施：触摸交互一律走 `pointer` 事件而非 `touch*` 分支、抽屉（实现时）用手写 `transform` 而不引第三方滑动库、JSAPI 侧不依赖 `navigator.userAgent` 判断设备类型。**若评审现场可借到手机，这三项应当作口头演示而不是文档承诺。**
+工程上的降风险措施：触摸交互一律走 `pointer` 事件而非 `touch*` 分支、抽屉用手写 `transform` 而不引第三方滑动库、JSAPI 侧不依赖 `navigator.userAgent` 判断设备类型。**若评审现场可借到手机，这三项应当作口头演示而不是文档承诺。**
 
 ### 10.4 🔴 报告图表用手绘 SVG，而非 PRD §5 写的 ECharts
 
@@ -707,21 +725,22 @@ ECharts 官方**只发整包**，没有「只含 radar + bar」的官方 thin bu
 
 | 文件 | 体积 |
 | --- | ---: |
-| `isochrone.js` | 116.9 KB |
-| `report.js` | 46.7 KB |
-| `isochrone.html` | 19.1 KB |
-| `isochrone.css` | 11.2 KB |
+| `isochrone.js` | 124.4 KB |
+| `report.js` | 47.0 KB |
+| `isochrone.html` | 20.8 KB |
+| `isochrone.css` | 18.8 KB |
 | `app.js` | 7.8 KB |
 | `report.css` | 6.7 KB |
 | `app.css` | 3.6 KB |
 | `index.html` | 3.0 KB |
-| **合计** | **215.0 KB** |
+| **合计** | **232.2 KB** |
 
-实际占用仅为预算的 **43 %**（上表为 **2026-10-11** 按 `wc -c / 1024` 重测；本轮 FR-104 落地带来的增量是
-`isochrone.js` +4.6 KB、`isochrone.html` +2.9 KB、`isochrone.css` +0.6 KB、`report.js` +1.1 KB），
+实际占用仅为预算的 **46 %**（上表为 **2026-10-11** 按 `wc -c / 1024` 重测；本轮 FR-106 落地带来的增量是
+`isochrone.css` +7.6 KB、`isochrone.js` +7.5 KB、`isochrone.html` +1.7 KB、`report.js` +0.4 KB，合计 +17.1 KB——
+移动端把手条样式与抽屉逻辑本来就只活在 `data-sheet-mode="mobile"` 那一支里，桌面一行都不多渲染），
 且**零 Vue、零 ECharts、零公网外链**（CI 有一条断言：静态 HTML 里出现 `http(s)://` 资源引用即失败）。
 
-> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（31 例），它把 `web/report.js`（25 个）与 `web/isochrone.js`（58 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在，并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
+> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（39 例），它把 `web/report.js`（25 个）与 `web/isochrone.js`（59 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在，并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
 
 ### 10.5 🔴 前 K 实测用了分层选择，而非 §4.3 字面的全局最近 K
 

@@ -19,6 +19,10 @@ CI 增一条无头冒烟（请求首页并断言关键 DOM 节点存在）」。
    以及标记「哪几类装着盲区主判定」的 `data-blind-cat`，全部与
    `services/poi_categories.py` 逐项相等。这条抓的是另一类失配：改了词表忘了改 HTML，
    前端拿着后端不认的键去请求（直接 400），或者把盲区警示指到错误的维度上。
+5. 🔴 **FR-106 移动端底部抽屉的接线契约**：把手条三个 `data-sheet` 都指向真实面板、
+   断点只有一个数字真值、位移只用 `transform`、拖拽的后续事件挂在 `window` 上、
+   移动端热区 ≥ 44 px。抽屉是这个仓库里唯一「DOM 不动、全靠属性与位移」的一块，
+   接错一根线就是「点了没反应」，而控制台不会响。
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ ISOCHRONE_HTML = WEB / "isochrone.html"
 REPORT_JS = WEB / "report.js"
 ISOCHRONE_JS = WEB / "isochrone.js"
 ISOCHRONE_CSS = WEB / "isochrone.css"
+REPORT_CSS = WEB / "report.css"
 INDEX_HTML = WEB / "index.html"
 
 # 只匹配「取单个元素」的写法；`querySelector` 走 CSS 选择器，不在本断言的范围内。
@@ -52,6 +57,16 @@ CATEGORY_HINT_TEXT = re.compile(r"""id="category-hint"[^>]*>\s*(?P<body>[^<]+?)\
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 JS_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 JS_LINE_COMMENT = re.compile(r"(?m)^\s*//.*$")
+# --- FR-106 抽屉：把手条三个按钮 + 一根装饰性拖拽条，开合全靠 `data-sheet` ↔ 面板 id 的对应。
+SHEET_BAR = re.compile(r'<div class="sheet-bar" id="sheet-bar">(?P<body>.*?)</div>', re.DOTALL)
+DATA_SHEET = re.compile(r'data-sheet="([a-z]+)"')
+ARIA_CONTROLS = re.compile(r'aria-controls="([a-z]+)"')
+BREAKPOINT_DECL = re.compile(r"const SHEET_BREAKPOINT_PX = (\d+);")
+# 移动端规则一律长成 `.page-map[data-sheet-mode="mobile"] <选择器> { … }`，声明块里不嵌套，
+# 所以 `[^}]*` 就够；选择器可能是逗号分组，交给 sheet_rule() 逐条比而不是拿子串搜。
+MOBILE_RULE = re.compile(
+    r'\.page-map\[data-sheet-mode="mobile"\]\s*(?P<selectors>[^{]+)\{(?P<body>[^}]*)\}'
+)
 
 
 def strip_html_comments(text: str) -> str:
@@ -363,3 +378,201 @@ def test_sortable_headers_and_unmeasured_go_last() -> None:
     assert "sortState" in code
     assert "aria-sort" in code
     assert "leftMissing ? 1 : -1" in code, "缺值垫底的实现被改动了"
+
+
+def strip_css_comments(text: str) -> str:
+    """去掉 CSS 的 `/* … */` 注释（块注释语法与 JS 相同，复用同一条正则）。
+
+    必须去：FR-106 那一段的说明里正写着 `body[data-sheet-mode="mobile"]` 与
+    `matchMedia("(max-width: 768px)")`，不剥注释的话，「HTML 不许预写这个属性」
+    「断点只有一个真值」这类断言会被说明文字带过去。
+    """
+    return JS_BLOCK_COMMENT.sub("", text)
+
+
+def sheet_rule(selector: str) -> str:
+    """取 `.page-map[data-sheet-mode="mobile"] <selector>` 这条规则的声明块，找不到返回空串。
+
+    按「选择器列表逐条比对」而不是拿 selector 去搜文本：分组选择器
+    （`a,\nb { … }`）和 `.sheet-tab` 与 `.sheet-tab[aria-expanded="true"]` 这种前缀包含，
+    用子串搜都会认错规则；分组里除第一条之外都自带完整前缀，所以逐条剥前缀再等值比。
+    """
+    css = strip_css_comments(ISOCHRONE_CSS.read_text(encoding="utf-8"))
+    for match in MOBILE_RULE.finditer(css):
+        for item in match["selectors"].split(","):
+            # 分组选择器里除了第一条，其余都自带完整前缀，先剥掉再逐条比。
+            stripped = re.sub(r'^\.page-map\[data-sheet-mode="mobile"\]\s*', "", item.strip())
+            if stripped == selector:
+                return match["body"]
+    return ""
+
+
+# --------------------------------------------------------------------------------------
+# FR-106 移动端底部抽屉：接线契约
+# --------------------------------------------------------------------------------------
+def test_sheet_bar_tabs_point_at_real_panels() -> None:
+    """把手条每个 `data-sheet` 都必须是一个真实存在的面板 id，且 `aria-controls` 与它同名。
+
+    「开哪一块」全靠这三个字符串建立对应：写错一个就是点「进度」没反应，
+    而 `aria-expanded` 会指着空气 —— 读屏用户听到「已展开」，屏幕上什么都没有。
+    """
+    text = strip_html_comments(ISOCHRONE_HTML.read_text(encoding="utf-8"))
+    bar = SHEET_BAR.search(text)
+    assert bar, "找不到 #sheet-bar"
+    keys = DATA_SHEET.findall(bar["body"])
+    assert keys == ["controls", "readout", "report"], keys
+    assert ARIA_CONTROLS.findall(bar["body"]) == keys, "aria-controls 与 data-sheet 不同名"
+    available = html_ids(ISOCHRONE_HTML)
+    for key in keys:
+        assert key in available, f"把手条指向不存在的面板 #{key}"
+    # 把手是 `aria-hidden` 的装饰性拖拽条：它能做的事，三个按钮都必须也能做，
+    # 否则键盘与读屏就只剩一条没有语义的路径。
+    assert 'aria-hidden="true"' in bar["body"]
+    assert (
+        text.index("</main>") > bar.end()
+    ), "把手条必须留在 </main> 内（否则键盘顺序跳到页脚之后）"
+
+
+def test_sheet_breakpoint_has_one_number_and_the_profile_probe_agrees() -> None:
+    """768 只能有一处数字真值（JS 常量），且 FR-107 的平台判定与报告样式得跟着它。
+
+    断点写两份必然分叉：抽屉在 700 px 生效、轻量档在 768 px 生效，就会出现
+    「手机上开着抽屉、请求体却按桌面口径取 k=16」这种自相矛盾的会话。
+    """
+    map_js = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    report_js = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    declared = BREAKPOINT_DECL.search(map_js)
+    assert declared, "isochrone.js 里没有 `const SHEET_BREAKPOINT_PX = …`"
+    px = declared.group(1)
+    # 抽屉那条 matchMedia 必须引用常量本身，而不是把数字再抄一遍。
+    assert "(max-width: ${SHEET_BREAKPOINT_PX}px)" in map_js
+    assert map_js.count("max-width:") == 1, "isochrone.js 里出现了第二条媒体查询，断点又开始分叉"
+    # `report.js` 那边是字面量（它拿不到 isochrone.js 的常量），所以必须与这个数相等。
+    # 两层括号都要转义：`(max-width: …)` 里的圆括号是媒体查询语法的一部分，不是捕获组。
+    used = re.findall(r'matchMedia\("\(max-width: (\d+)px\)"\)', report_js)
+    assert used and set(used) == {px}, used
+    # 样式表里不许再出现第三个 768 来管抽屉：抽屉的开关是属性，不是媒体查询。
+    css = strip_css_comments(ISOCHRONE_CSS.read_text(encoding="utf-8"))
+    assert "(max-width: 768px)" not in css
+    assert f"@media (max-width: {px}px)" in REPORT_CSS.read_text(encoding="utf-8")
+
+
+def test_no_js_path_keeps_the_panels_in_normal_flow() -> None:
+    """没有脚本时抽屉**不出现**，三块面板回到正常流里堆叠 —— 这是刻意的降级，得守住。
+
+    三条各守一头：① HTML 里不许预写 `data-sheet-mode`（预写了，JS 挂掉时面板照样被
+    `position: fixed` 移出去，等于把参数和报告永久藏到屏幕外）；
+    ② 未加 `[data-sheet-mode="mobile"]` 前缀的 `.sheet-bar` 基础规则必须 `display: none`；
+    ③ 收起态必须同时写 `transform` 与 `visibility: hidden` —— 只位移的话收起的面板仍被读屏
+    读到（三块面板叠在同一处，等于一次读出三份），只 hidden 的话动画结束会跳一下。
+    """
+    text = strip_html_comments(ISOCHRONE_HTML.read_text(encoding="utf-8"))
+    assert "data-sheet-mode" not in text
+    css = strip_css_comments(ISOCHRONE_CSS.read_text(encoding="utf-8"))
+    base = re.search(r"(?m)^\.sheet-bar \{(?P<body>[^}]*)\}", css)
+    assert base, "找不到 .sheet-bar 的基础规则"
+    assert "display: none" in base["body"], base["body"]
+    collapsed = sheet_rule("#controls")
+    assert "position: fixed" in collapsed
+    assert "transform: translateY(" in collapsed and "visibility: hidden" in collapsed, collapsed
+    # 展开态三条选择器共用一个声明块（`[data-sheet-open="…"] #…`），比一条就够。
+    opened = sheet_rule('[data-sheet-open="controls"] #controls')
+    assert "transform: translateY(0)" in opened and "visibility: visible" in opened, opened
+
+
+def test_stage_height_does_not_subtract_footer_or_legend() -> None:
+    """🔴 回归锚点：地图可用高度只扣「地图上方真正占掉的像素」。
+
+    2026-10-11 第一版把 `.page-foot`（101 px）与 `#legend`（640 px）一起从视口里减掉，
+    375×667 实测地图只剩 240 px —— 抽屉做得再对，「地图占满首屏」这条也过不了。
+    页脚与图例本来就在首屏之下、靠滚动才看到，不参与扣减；
+    量 stage-area 自己的上边界，比按元素名累加可靠（margin、gap、`[hidden]` 都在几何里）。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    body = re.search(r"function sizeSheetStage\(\) \{(?P<body>.*?)\n\}", code, re.DOTALL)
+    assert body, "找不到 sizeSheetStage()"
+    for element in (".page-foot", "#legend", ".banner", ".page-head", ".notice"):
+        assert element not in body["body"], f"又开始按元素名扣高度了：{element}"
+    assert "getBoundingClientRect" in body["body"]
+    assert '"--map-h"' in body["body"] and '"--sheet-bar-h"' in body["body"]
+
+
+def test_sheet_drag_uses_pointer_events_on_window_not_capture() -> None:
+    """拖抽屉的后续事件必须挂在 `window` 上，且整段不许出现 `setPointerCapture`（R15 / D-1）。
+
+    🔴 D-1 的教训：`setPointerCapture` 会把这次指针的后续事件一律改派给捕获者。
+    把手只有 104 px 宽，手指一滑出它就断流 —— 捕获更是让事件永远到不了别处；
+    抽屉拖到一半停住，比根本没有抽屉更糟。
+    只写 pointer 事件、不写 `touch*` 分支，同样是 R15 的口径（两条路径会互相漏事件）。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    assert 'sheetGrip.addEventListener("pointerdown", sheetPointerDown)' in code
+    for event, name in (
+        ("pointermove", "sheetPointerMove"),
+        ("pointerup", "sheetPointerUp"),
+        ("pointercancel", "sheetPointerUp"),
+    ):
+        assert f'window.addEventListener("{event}", {name})' in code, event
+    start = code.index("const SHEET_BREAKPOINT_PX")
+    end = code.index('el.stage.addEventListener("pointerdown"')
+    section = code[start:end]
+    assert "setPointerCapture" not in section
+    assert "touchstart" not in code and "touchmove" not in code
+    # 拖拽是「动了才算」：6 px 阈值 + 中点吸附，避免把手指的原地抖动当成收起。
+    assert "moved < 6" in section and "travel / 2" in section
+    # 把手不关掉浏览器滚动手势，pointermove 根本不发。
+    assert "touch-action: none" in sheet_rule(".sheet-grip")
+
+
+def test_mobile_hit_areas_are_44px() -> None:
+    """把手条按钮、拖拽条与每一条勾选行的热区都要 ≥ 44 px（PRD §6.3）。
+
+    勾选框这条要单独说：`input` 本身只有 18 px，而原生点击目标是整行
+    `<label class="check">` —— `min-height` 加在 input 上看着达标，实际能按到的还是 18 px。
+    """
+    for selector in (".sheet-tab", ".sheet-grip", ".check", "#categories .check", ".back"):
+        rule = sheet_rule(selector)
+        assert rule, f"移动端缺少 {selector} 规则"
+        assert "min-height: 44px" in rule, selector
+    css = strip_css_comments(ISOCHRONE_CSS.read_text(encoding="utf-8"))
+    band = re.search(r"@media \(max-width: 480px\) \{(?P<body>.*?)\n\}", css, re.DOTALL)
+    assert band and ".page-map button" in band["body"], "≤480 的按钮 44 px 兜底被删了"
+    assert "min-height: 44px" in band["body"]
+
+
+def test_mobile_head_yields_the_first_screen_to_the_map() -> None:
+    """页头 / 横幅在移动端必须压扁，而且只许藏标语，不许藏导航。
+
+    375×667 实测：按桌面板式是 `.page-head` 227 px + `.banner` 210 px，地图被顶出首屏。
+    压扁的方式有讲究 —— `.sub` 那句标语（「CircleDoc · 15 分钟生活圈体检助手」）是重复信息，
+    可以 `display: none`；同一段里的「← 返回首页」是手机上唯一的方向导航，
+    连它一起藏就是拿可用性换像素。
+    """
+    assert "display: none" in sheet_rule(".sub span")
+    assert "display: none" not in sheet_rule(".sub")
+    assert "padding" in sheet_rule(".page-head")
+    banner = sheet_rule(".banner")
+    # 横幅要封顶内部滚动，不能把地图顶下去。
+    assert "max-height" in banner and "overflow-y: auto" in banner
+    text = strip_html_comments(ISOCHRONE_HTML.read_text(encoding="utf-8"))
+    sub = re.search(r'<p class="sub">(?P<body>.*?)</p>', text, re.DOTALL)
+    # 返回首页链接不在 .sub 里，压缩规则就会把它一起藏掉。
+    assert sub and 'class="back"' in sub["body"]
+
+
+def test_report_opens_the_panel_it_just_filled() -> None:
+    """手机上跑完体检要把报告浮到地图上方，而 `window.CircleDocMap` 得真的交出这个方法。
+
+    不自动开的话「一键体检」在手机上看起来就是死的：结果写进那块收起态在屏幕外的固定层。
+    桌面必须是空操作 —— 三栏本来同屏，开抽屉反而把面板 fixed 出去。
+    """
+    report = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    assert 'openSheet("report")' in report
+    assert "function openSheet(" in code
+    # 桌面必须是空操作：桥接方法内部判过视口，调用方不需要再判一次。
+    assert "openSheet: (key) => {" in code
+    assert "if (isSheetMobile()) openSheet(key);" in code
+    assert "isSheetMobile: () => isSheetMobile()," in code
+    # Escape 收起与 `aria-expanded` 同步都靠 openSheet("") 这一条路径。
+    assert "aria-expanded" in code and 'openSheet("")' in code

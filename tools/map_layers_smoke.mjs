@@ -228,6 +228,18 @@ const documentStub = {
   createElementNS: (ns, tag) => makeElement(tag, ns),
   getElementById: (id) => getById(id),
   querySelector: () => null,
+  /**
+   * 🔴 文档级 `querySelectorAll` 一律回空数组，理由要说清：
+   * `isochrone.js` 现在只有两条文档级查询 —— FR-104 的 `#categories input.cat`
+   * 与 FR-106 的 `#sheet-bar .sheet-tab`。逐条枚举七个 `data-cat` 等于把后端词表
+   * 在测试桩里抄一份（改词表时必漏），而抽屉那三条更不该由这个只管「画得对不对」的
+   * 桩来兜。空数组在这两处都是**等价于「全选 + 桌面态」**的真实语义：
+   * `selectedCategories()` 折成 `null`（不发 `categories` 键），`sheetPanels` 为空、
+   * `syncSheetMode()` 停在 desktop。两条的接线契约分别由
+   * `tests/test_web_smoke.py::test_category_checkboxes_match_the_backend_wordlist`
+   * 和同文件的 FR-106 那组断言对着**真 HTML** 核，不靠这个桩。
+   */
+  querySelectorAll: () => [],
   addEventListener: () => {},
 };
 

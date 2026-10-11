@@ -264,9 +264,139 @@
 
 1. **live / cache 下的 `categories` 效果**：零出网是本轮前提。子集只改检索集合，不改算路，
    所以 live 侧的额外风险只在配额（子集省调用），不在结论形态。
-2. **移动端（≤ 768 px）下的七行勾选**：抽屉本身还没实现（见 README §10.3 的更正），
-   本轮只在桌面宽度验。
+2. **移动端（≤ 768 px）下的七行勾选**：当时抽屉尚未实现（见 README §10.3 的两步更正），本轮只在桌面宽度验。
+   → **同日 FR-106 落地后已补**：`#categories .check` 在 375×667 与 414×896 两档各 12 行、实测高 44/45 px，
+   见下一节「FR-106 移动端底部抽屉」第 1 / 2 项。
 3. **键盘 Tab 顺序穿过七个框 + 「恢复全选」**：未逐项走查，只确认框是原生 `input[type=checkbox]`。
+
+## FR-106 移动端底部抽屉 · DevTools 实测（2026-10-11，实现人自验，零出网）
+
+**这一节补的是 PRD §6.3 那条一直没有可复现证据的验收项**：「两档视口 375×667 / 414×896，
+无横向滚动、无元素重叠、点击热区 ≥ 44 px、抽屉可展开收起、自动走 FR-107 轻量档」。
+此前 README §10.3 把它写成「已验收」是不实陈述，10-11 先更正为「未实现」、同日落地后按实测回填。
+
+### 0. 前提与零出网自证
+
+- 服务：`uvicorn api.app:app --port 8795`，用空值压掉 `.env` 里的两个真实 AK
+  （`BAIDU_SERVER_AK= BAIDU_BROWSER_AK=`，pydantic-settings 的空环境变量优先级高于 `.env`）。
+- 通道：chrome-devtools 设备模拟。**每次改完 CSS 必须 `navigate_page {type:"reload", ignoreCache:true}`**，
+  否则读回来的计算样式还是旧的（本轮就差点把「规则没生效」误判成 bug）；信几何之前先确认那条规则真在
+  `document.styleSheets` 里。
+- 零出网证据：本轮 `POST /api/analysis`（`platform:"mobile"`）响应头
+  `x-http-requests: 0`、`x-place-calls: 0`、`x-quota-units: 0`，`x-request-id: f0c790505f524336`。
+
+### 1. 375×667（PRD §6.3 小档）
+
+| 元素 | 实测 |
+| --- | --- |
+| `body[data-sheet-mode]` | `mobile` |
+| 页头 `.page-head` | 高 **119 px** |
+| 提示横幅 `.banner` | 高 **135 px**（`top 127 → 262`） |
+| 配额通知 `.notice` | `display: none`（本轮未触发，高 0） |
+| **地图 `.stage-area`** | **`top 278 → bottom 615`，高 337 px**；内联 `--map-h: 337px`，计算高度与之一致 |
+| 把手条 `#sheet-bar` | `top 615 → bottom 667`，高 **52 px**，`display: flex` |
+| 三个 tab `.sheet-tab` | 高 `[44, 44, 44]` |
+| 拖拽区 `.sheet-grip` | 高 **44 px**（宽 104 px），`min-height: 44px` |
+| `#controls .check` | **12 行**，高只有两种值：**44 / 45 px** |
+| 「← 返回首页」`.back` | 高 **44 px**，`display: inline-flex` |
+| 页脚链接 | 高 **44 px** |
+| `documentElement.scrollWidth / clientWidth` | **375 / 375** → 无横向滚动 |
+| 收起态 `#controls` | `transform: matrix(1,0,0,1,0,492.35)`、`visibility: hidden` |
+| 展开态 `#controls` | **`top 175 → bottom 615`，高 440 px**，`translateY(0)`、`visibility: visible`、`overflow-y: auto`、圆角 `14px 14px 0 0` |
+| 面板底边 ↔ 把手条顶边 | **`gap = 0`**（无缝，不露 1 px 残边） |
+| `aria-expanded` | `controls=true, readout=false, report=false` |
+
+**「地图占满首屏」的读法**：首屏 667 px 里，页头 + 横幅 + 留白占掉 278 px，剩下 **337 px 整条给地图**，
+把手条贴死屏幕底边；图例（541 px）和页脚（124 px）在 615 px 以下，**靠滚动才看见**——这是刻意的，
+把它们也算进高度扣减就是 §2.12 那个 bug。
+
+### 2. 414×896（PRD §6.3 大档）
+
+| 元素 | 实测 |
+| --- | --- |
+| 页头 / 横幅 | 119 / 135 px（与小档一致，压缩规则不是按宽度硬编码） |
+| **地图 `.stage-area`** | **`top 278 → bottom 844`，高 566 px**，内联 `--map-h: 566px` |
+| 把手条 | `top 844`，高 52 px |
+| tab / `check` / `.back` | `44, 44, 44` / 44-45 px / 44 px |
+| `scrollWidth / clientWidth` | **414 / 414** → 无横向滚动 |
+| 整页高度 `scrollHeight` | 1520 px（抽屉是 `fixed`，不参与文档流） |
+| 展开态 `#controls`（**等过渡落定后**） | **`top 253 → bottom 844`，高 591 px**，`max-height: 591.36px`（= 66vh），`translateY(0)`，`gap = 0`，未开的两块 `visibility: hidden` |
+
+### 3. 开合：拖、点、键盘三条输入路径都走了一遍（375×667）
+
+`data-sheet-open` 逐步实测（合成 `PointerEvent`：`pointerdown` 打在 `.sheet-grip` 上，
+`pointermove/up` 派发到 `window`）：
+
+| 动作 | 结果 `data-sheet-open` |
+| --- | --- |
+| 基线（收起） | `""` |
+| **上拖 240 px** | `controls`（开） |
+| **下拖 300 px** | `""`（关） |
+| **轻点（收起态）** | `controls`（开） |
+| **轻点（展开态）** | `""`（关）← 这条是第一版的 bug，见 §2.12 |
+| 轻点（`readout` 开着时） | `""`（关的是当前那块，不是写死 `controls`） |
+| Escape（`report` 开着时） | `""` |
+| 收尾残留 | 三块面板的内联 `transform` 全为 `none`；`.sheet-dragging` 元素数 **0** |
+
+三个 tab 逐个 `click()`：`controls → readout → report` 顺次接管，`aria-controls` 与 `aria-expanded` 同步。
+**一次只开一块**落定后复测：`report=visible/ty=0`，另两块 `hidden/ty=492.35`。
+
+⚠️ 这里有个必须记的测量坑（和 `docs/TEST_REPORT.md` §2.12 第 ③ 条同源）：收起态的 `visibility` 带
+`transition: visibility 0s linear 0.2s` **延迟**，所以在同一个 `evaluate_script` 里刚切完就读，
+三块面板会**同时报 `visible`**——那是过渡没走完，不是重叠。分两次调用重读才是真值。
+
+### 4. 断点唯一真值 + 不伤桌面
+
+| 视口 | `data-sheet-mode` | 把手条 | 面板 | 地图高 |
+| --- | --- | --- | --- | --- |
+| **768** × 900 | `mobile` | `flex` | fixed | 589 px（内联 `--map-h: 589px`） |
+| **770** × 900（请求的 769 被模拟层报回 770） | `desktop` | `none` | `static` | 522 px（**无**内联 `--map-h`） |
+| 1280 × 800（桌面三栏） | `desktop` | `none` | `static`，内联 `transform` 为 `none` | 464 px |
+
+1280 × 800 那档还顺带确认了移动端压缩规则**没有漏到桌面**：`.layout` 网格是 `300px 540.8px 360px`、
+`.sub span`（标语）回到 `inline`、`scrollWidth / clientWidth` 1265 / 1265 无横向滚动。
+
+⚠️ 「770」这一档请求的是 769，DevTools 模拟层报回的 `innerWidth` 是 **770**（宽度取整），
+**不是代码里的判断偏了**：`matchMedia("(max-width: 768px)")` 在 768 判真、770 判假，边界落在正确的两侧。
+
+另外两条设计口径在这轮被证实：
+- **开关是 body 属性而不是媒体查询**，所以「断点在哪」全项目只有 JS 里那个 768；
+  768 档**没开 `isMobile` / `hasTouch`** 也照样进抽屉 —— 判定纯按宽度，不看 UA、不看触摸能力。
+- **无 JS 就没有抽屉**，三块面板回到正常流堆叠（刻意降级）。CI 侧由
+  `tests/test_web_smoke.py::test_no_js_path_keeps_the_panels_in_normal_flow` 钉住。
+
+### 5. FR-107 联动：手机上点「一键体检」到底跑了什么
+
+`#run-analysis` 的真实点击（375×667，`before: "readout"`）→ 完成后 **`data-sheet-open` 变成 `report`**、
+`#report` `visible` / `translateY(0)` / `top 175 → bottom 615`、`aria-expanded` 只有 `report=true`。
+不自动开的话，结果会写进一块收起态在屏幕外的固定层，「一键体检」在手机上看起来就是死的。
+
+请求体只有 `{"minutes":15,"modes":["walking"],"platform":"mobile","lnglat":"116.4074,39.9042"}`
+（**没有 `categories` 键** = 全选），响应 `meta.platform: "mobile"`、`meta.lightweight: true`、`meta.k: 6`、
+`data_mode: "mock"` / `data_source: "sample"`，`score.total 44.65`。
+
+📌 顺带澄清一处容易被读成 bug 的数字：全选态下 `score.weight_sum` 也是 **0.95**，
+但**这不是类别子集造成的**——同一坐标不带 `platform`（桌面档 `k=12`、`lightweight: false`）跑一次，
+`weight_sum` 同样是 0.95、总分同样 44.65。是这个 mock 样例本身有一个维度拿不到候选，
+归一化提示如实写了 0.95。
+
+### 6. 本轮抓出的两处缺陷（正文见 `docs/TEST_REPORT.md` §2.12）
+
+1. **地图高度多扣了页脚与图例**，375×667 下只剩 ~240 px，「占满首屏」直接落空。
+   改成只量 `.stage-area` 自己的上边界 + 把手条高；因为「上边界」会随横幅显隐变，重算点必须有
+   **五处**：`hideBanner()`、`setBanner()`、`renderQuotaNotice()` 的两个出口，以及 `renderSheets()` 本身
+   （`grep -n "sizeSheetStage()" web/isochrone.js` 可数）。少一处不会报错，只会在地图上留一条空白。
+2. **把手条轻点能开不能关**（`moved < 6` 的轻点走到「按位移决定开合」的分支，位移 0 = 保持原样）。
+   改成轻点按当前展开态取反。
+
+### 7. 本轮**没有**验的（别当成已验）
+
+1. **真机**上的抽屉手感、阻尼与 iOS Safari 的 `100vh` 地址栏抖动——本节全部是 Chrome DevTools 模拟。
+   「拖得动」在模拟里成立，不等于手指好拖。
+2. **双指缩放仍未实现**（代码只有 `wheel`），抽屉落地不改变这一条。
+3. 过渡动画的**观感**（0.2 s `ease-out`）：本环境截图通道虽可用，但按「关于截图」一节的口径
+   不提供 PNG；且上面的几何都是**落定后**复测的，过渡中间帧没有逐帧采样。
+4. `prefers-reduced-motion: reduce` 下的关闭过渡只在 CSS 里写了规则，**没在模拟里切换该偏好实测**。
 
 ## 未在真机验证清单（风险 R15 诚实登记）
 
@@ -286,3 +416,7 @@
   与 `swarm/m_ak_seed.py --port 8794`（浏览器 AK 本地给值）。验完后 `netstat -ano | grep -E "8793|8794"` **无输出**，
   8765 ~ 8794 全线无 LISTENING。
 - `pytest -q` 复跑结果见验收报告正文（基线 240 全绿，验收全程未改动 `web/ api/ services/ infra/ tests/ swarm/` 任何文件）。
+- FR-106 那一轮（2026-10-11）起的本地服务与模拟状态也已收干净：`uvicorn api.app:app --port 8795`
+  （用空 AK 环境变量压住真实 AK 起的那个）停止后 `netstat -ano | grep 8795` **无输出**；
+  chrome-devtools 的设备模拟从 `375x667x2,mobile,touch` 复位回 `1280x800x1`；
+  冒烟用的临时响应 `_map_input.json` 已删除（按 `docs/TEST_REPORT.md` §7 第 5b 步随时可再生，不入库）。

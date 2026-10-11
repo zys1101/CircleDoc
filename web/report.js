@@ -1030,6 +1030,11 @@
           blindCount ? ` + ${overlays.blindBlocks} 块盲区` : ""
         }。`;
       }
+      // FR-106：手机上把报告浮到地图上方。跑完体检却要滚到页面最底才看到内容，
+      // 现场会被当成「按钮没反应」；桌面是三栏同屏，`openSheet` 内部判过视口，这里无需再判断。
+      if (window.CircleDocMap && window.CircleDocMap.openSheet) {
+        window.CircleDocMap.openSheet("report");
+      }
     } catch (error) {
       el.hint.textContent = `体检请求失败：${(error && error.message) || error}`;
     } finally {

@@ -393,6 +393,30 @@
           </p>
         </div>
       </section>
+      <!--
+        FR-106 移动端底部抽屉的把手条。三条口径写在这里：
+          1. **只在 `body[data-sheet-mode="mobile"]` 下出现**，而这个属性由 `isochrone.js` 按
+             `matchMedia("(max-width: 768px)")` 设置。桌面是 `display: none`，不用 `hidden` 属性
+             是因为 `[hidden]` 会被 `.sheet-bar { display: flex }` 直接盖掉（属性选择器与类选择器
+             同权重、比大小看写序），留一个靠 JS 同步的开关比和 UA 样式表抢优先级稳。
+          2. 抽屉本体**不在这里**，就是上面那三块面板（`#controls` / `#readout` / `#report`）：
+             移动端把它们转成 `position: fixed` 的层，位移只用 `transform: translateY()`——
+             不引第三方滑动库（R15 的工程措施）。DOM 不搬家，桌面三栏布局逐字节不变。
+          3. 键盘与读屏只走这三个 `button`（`aria-controls` + `aria-expanded` 由 JS 同步）；
+             拖拽条 `#sheet-grip` 是 `aria-hidden="true"` 的装饰性增强——它能做的事，按钮都能做。
+      -->
+      <div class="sheet-bar" id="sheet-bar">
+        <button type="button" class="sheet-tab" data-sheet="controls" aria-controls="controls" aria-expanded="false">
+          参数
+        </button>
+        <button type="button" class="sheet-tab" data-sheet="readout" aria-controls="readout" aria-expanded="false">
+          进度
+        </button>
+        <button type="button" class="sheet-tab" data-sheet="report" aria-controls="report" aria-expanded="false">
+          报告
+        </button>
+        <span class="sheet-grip" id="sheet-grip" aria-hidden="true">拖动展开 / 收起</span>
+      </div>
     </main>
 
     <footer class="page-foot">

@@ -1144,7 +1144,7 @@ mock 掉网络层，连发 20 个请求：
 | ~~**JSAPI 4.0 实底图上的顶点点击**~~ | ✅ **2026-10-10 已补验**（真实浏览器 + 真实 AK + 真实指针事件） | §4 的「SVG 舞台 / JSAPI 实底图双渲染」两条路径**现在都真跑过**：实时底图侧 23 个 `BMap_Marker`、点顶点出网 1 次即画出真实路网轨迹（48/45 折点），话术随取数层从「合成示意线」变「真实路网轨迹」。仍未验的是**12 次硬上限与连点竞态在实时底图路径上**（同一份 `loadPolyline()`，SVG 侧已实测；再跑要烧 10 次真实 `direction`）。逐条证据见 `docs/shots/README-isochrone-acceptance.md` |
 | 🔴 **新发现，未修**：live 等时圈的响应体 `usage` 少记一个批次 | 同一次 `POST /api/isochrone`：`body.usage` 报 `quota_units=40 / http_requests=6`，同 `request_id` 的服务端日志是 `44 / 7` | §9 的三栏计量口径在**这条路径上偏乐观**（真实花费 ≥ 报告值）。§2 的 `ProbeTally` 与客户端累加器为何差一个批次**尚未定位**；mock 层两账本同源，所以零出网冒烟抓不到 |
 | **移动端真机行为**（R15） | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
-| 🔴 **FR-106 底部抽屉** | **功能未实现**（2026-10-11 登记）：`≤ 768 px` 只有单栏堆叠断点，没有可拖拽展开/收起的抽屉，地图不占满首屏 | §1.4 的前端形态目前只覆盖桌面双栏。README §10.3 此前把「抽屉可展开收起」写成已验收，属**不实陈述**，已就地更正；连带地，PRD §6.3 的「两档视口无横向滚动、无元素重叠」在 `docs/` 里**没有任何可复现证据**，实现抽屉时必须一并补，而不是只补代码 |
+| ~~🔴 **FR-106 底部抽屉**~~ | ✅ **2026-10-11 已实现并补验**：`body[data-sheet-mode="mobile"]` 由 JS 按 `matchMedia("(max-width: 768px)")` 写，三块面板原封不动地变成 `position: fixed` + `translateY()` 的抽屉，一次开一块，把手条可点可拖、Escape 收起 | §1.4 的前端形态现在**两档都有实测**：375×667 地图 `278 → 615`（高 337 px）、414×896 `278 → 844`（高 566 px），`scrollWidth / clientWidth` 分别是 375/375 与 414/414（无横向滚动），逐元素热区 ≥ 44 px。**这一节的历史要连着读**：README §10.3 一度把「抽屉可展开收起」写成已验收（不实），10-11 先更正为「未实现」、同日才真落地；数字与两轮缺陷见 `docs/TEST_REPORT.md` §2.12 与 `docs/shots/README-isochrone-acceptance.md` 的「FR-106 移动端底部抽屉」一节。**仍未验**的是真机那三项（上一行）——DevTools 里拖得动不等于手指拖得动，双指缩放更是至今没实现 |
 | ~~**样例社区坐标的真实性**~~ | ✅ **2026-10-10 已补验**（`gen_samples.py --verify` 走 `/api/suggest` + 逆地理交叉核对行政区） | 三份清单标 `coord_verified: true`，含义是「**工具核验过且行政区对得上**」，不是人工实地踏勘；`/api/samples` 原样透出该标记。🔴 教训：**geocode 只能给到城市级坐标**，「非空就算核验」会把三个错坐标一起标成已核验（`docs/TEST_REPORT.md` §2.8） |
 | **`live` 模式下 `market` 的召回** | 检索词 `市场$超市$便利店` 被「市场监督管理局」（`政府机构;行政单位`）等同名机构挤占，`tag` 过滤实测反而把结果清空 | FR-221 的盲区主判定依赖 `market` ∩ `pharmacy` ∩ `primary_school`，`market` 恒为 0 → **`live` 盲区面积系统性偏大**（交道口 62.29 %、肖家河 86.89 %）。本轮口径是**接受并明示**：后端对**真实检索那一侧**（`data_source = live` **与 `cache`**）的报告在 `notes` 里挂提示，`mock` 口径不受影响。`cache` 必须一起算——缓存里存的就是同一份真实返回（`docs/TEST_REPORT.md` §2.9）。试验数据与三条约束见 `docs/TEST_REPORT.md` §4.4 |
 | **浏览器内真实渲染** | 本环境的无头 Chrome 无输出 | §10.2 / §10.3 的图表与 DOM 结论来自 Node + 最小 DOM 打桩真跑的两条渲染路径（`tools/report_dom_smoke.mjs` 15 项 + `tools/map_layers_smoke.mjs` 12 项断言，`grep -c 'OK '` 实测），它**不是**真实浏览器 |
@@ -1154,7 +1154,7 @@ mock 掉网络层，连发 20 个请求：
 ### 12.1 一处已修的内部注释不一致（留档）
 
 `web/report.js` 的模块 docstring 曾写「两边只通过 `window.CircleDocMap` 的 **8 个方法**打交道」，
-`web/isochrone.js` 末尾的接口注释写「刻意只暴露 **6 个方法**」，而该对象实际导出
+`web/isochrone.js` 末尾的接口注释写「刻意只暴露 **6 个方法**」，而该对象**当时**实际导出
 **12 个方法 + 1 个 `constants`**（`adoptIsochrone` / `setOverlays` / `getCenter` / `setCenter` /
 `getActiveMode` / `readControls` / `setBusy` / `setRunHint` / `focusOn` / `pushProgress` /
 `clearProgress` / `isLiveMap`，外加 `constants`）。
@@ -1165,6 +1165,11 @@ mock 掉网络层，连发 20 个请求：
 理由是这个接口仍在增长（FR-212/FR-222 加了 `setOverlays`、FR-223 加了 `focusOn`），
 写死个数的注释一定会再次过期 —— 而「注释说 6 个、实际 12 个」比不写更糟，
 它会让人以为少挂了一个方法。
+
+**这条判断随后就被验证了一次**：FR-106 又加了 `openSheet` 与 `isSheetMobile`，该对象现在
+`Object.keys(...).length` 实测 **15**（14 个方法 + 1 个 `constants`）。如果当初只是把 6 改成 12，
+这一轮就得再改一次——而现在代码里**没有任何数字要同步**，本节上面那句「当时 12 个」
+是历史陈述、不参与对账。
 
 ⚠️ 本节刻意**不写行号**：校对过程中 `report.js` 的那句注释在本次会话内就因 docstring 被删掉一行
 而移动了位置，硬编码行号会立刻过期。要定位按引号里的原文搜索即可。

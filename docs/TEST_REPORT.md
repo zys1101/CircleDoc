@@ -5,7 +5,7 @@
 | 文档定位 | PRD §9 交付物「对比测试报告」；对应 FR-405、FR-406、§6.1、§6.2 |
 | 最后更新 | 2026-10-11 |
 | 测试命令 | `pytest -q`（零配置、零 AK、零真实出网） |
-| 结论 | **451 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
+| 结论 | **459 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
 
 ---
 
@@ -14,7 +14,7 @@
 **2026-10-10 起本项目已接入真实百度 AK**（服务端 + 浏览器端两类，配在 gitignored 的 `.env` 里）。
 所以这份报告现在有两类证据，**口径不同、不互相顶替**：
 
-* **`mock` 侧**：451 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
+* **`mock` 侧**：459 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
   也是本文 §1、§2、§3、§5 的主口径。
 * **`live` 侧**：§4.3 是一次**真实出网**的端到端实跑（三样例各一次），§6 的「JSAPI 实底图顶点点击」
   是另一次真实浏览器 + 真实出网的补验。§2.6 ~ §2.9 四个缺陷**只有在 live 下才暴露**——
@@ -45,15 +45,15 @@
 | `test_score.py` | 31 | 加权、95 % 权重缺口裁决、等级线、盲区惩罚、摘要生成 | FR-301、FR-302、FR-304 |
 | `test_isochrone_api.py` | 26 | `/api/isochrone` 全形状、降级、polyline 12 次硬上限 | FR-201、FR-203、FR-403 |
 | `test_analysis_api.py` | 46 | `/api/analysis` 报告形状、任务轮询、后台模式、`/api/poi` 七维度、错误信封、**真实检索盲区偏大提示（`live` 与 `cache` 两态各断言一次 + `sample` 反向断言）**、**FR-104 类别子集：伤及盲区主判定的 7 种勾选组合逐一断言 + 总分分母随子集收缩** | §4.7、FR-205、FR-404、§4.4、§2.9、FR-104 |
-| `test_web_smoke.py` | 31 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线 | R11、R12、R13、FR-213、FR-104 |
+| `test_web_smoke.py` | 39 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线、**FR-106 抽屉的把手条 ↔ 面板对账 / 断点唯一真值 / 无 JS 降级 / 44 px 规则 / 地图高度口径** | R11、R12、R13、FR-213、FR-104、FR-106 |
 | `test_samples_baseline.py` | 16 | 三样例一致性、三型差异方向、基线不漂 | FR-102、FR-412、§6.1 |
 | `test_coord_param_table.py` | 13 | 接口 × 坐标参数名 × 坐标顺序常量表 | FR-406、R8 |
-| `test_health_contract.py` | 10 | `/api/health` 三个「数据模式」字段的位置与值域、零配置横幅、AK 不外泄 | §4.6、FR-404、FR-410 |
+| `test_health_contract.py` | 11 | `/api/health` 三个「数据模式」字段的位置与值域、零配置横幅、AK 不外泄 | §4.6、FR-404、FR-410 |
 | `test_cache_store_singleton.py` | 4 | 缓存单例口径唯一 | FR-402 |
-| **合计** | **451** | | |
+| **合计** | **459** | | |
 
-耗时：**4.49 ~ 4.77 s**（同一轮 451 例，本机连续三次实测）。上一轮记录的 8.94 / 11.55 s
-**不是代码回归**而是后台负载：那次 `chrome-devtools` 浏览器与它的 node MCP 服务都在跑，
+耗时：**4.79 ~ 4.88 s**（同一轮 459 例，本机连续三次实测，2026-10-11；`chrome-devtools` 与 node MCP 全程在线）。
+上一轮记录的 8.94 / 11.55 s **不是代码回归**而是后台负载：那次 `chrome-devtools` 浏览器与它的 node MCP 服务都在跑，
 纯 CPU 基准 `sum(range(10**7))` 同时段实测 0.644 s（正常量级的两倍），最慢单例
 `test_task_registry_is_bounded` 也从 0.68 s 涨到 1.9 ~ 2.3 s。本轮三次测量时浏览器 MCP
 **仍然在线**，所以那个区间只能说明「同一台机器同一份代码可以差 2.4 倍」，
@@ -85,15 +85,17 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 
 ---
 
-## 2. 开发过程中发现并修复的十个真实缺陷
+## 2. 开发过程中发现并修复的十二个真实缺陷
 
-十份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
+十二份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
 「把 CI 脚本真的执行一遍」「在最小 DOM 打桩下真跑一遍绘制路径」
+「把移动端抽屉在 DevTools 里真拖一遍并量 `getBoundingClientRect`」
 「**配上真实 AK 跑一遍 live 全链路**」之后暴露的。
 其中 §2.6 ~ §2.9 四个**只在接入真实 AK 之后才可能出现** —— 在离线演示阶段，
 它们全都被「合成数据比真实数据更完整」这件事盖住了。
 §2.10 是**在真实浏览器里点出来的**：`node --check` 与 451 例单测全绿，全选态的提示文案
 却仍然写错，因为那条分支只有真人打开页面才会看到。
+§2.11 更难看一档：那一轮**写在文档里的冒烟数字本身是假的**，`node --check` 拦不住、单测也拦不住。
 
 ### 2.1 `services/poi_search.py`：7 处协程未 `await`（会导致接口 500）
 
@@ -385,6 +387,85 @@ network 记录 **8 条、全部指向 `127.0.0.1`**（`health` / `samples` / 2 �
 与「已按计分权重之和 0.60 归一化到 0~100」；**同一中心点全选那次的请求体里没有 `categories` 键**，结果
 「完成：44.6 分（D），耗时 15 ms。 地图叠加：23 个圈内设施 + 1 块盲区。」。四态文字色实测
 `rgb(107,114,128)` / `rgb(169,100,10)` / `rgb(207,34,46)`。逐条出处见 `docs/shots/README-isochrone-acceptance.md`。
+
+### 2.11 🔴 上一轮写进文档的「冒烟自测 12 项实测」是**手抄的**：FR-104 提交时那条脚本已经崩了
+
+**这一条是本文自己的不实陈述，性质和 §2.10 一样严重。**
+
+提交 `3047917`（FR-104）里，本文有两处把 `tools/map_layers_smoke.mjs` 写成**跑过并且 12 项通过**：
+§6 的「浏览器内真实渲染」行（`**12 项**，grep -c 'OK ' 实测`）和 §7.1 的复核表
+（`map_layers_smoke.mjs 断言条数 … 12 … 此前文档写的 12（对）`）。
+
+**而在那同一个提交上，这条脚本一条断言都没跑。** 可复现证据——把 `3047917` 的两份文件取到临时目录直接执行：
+
+```
+$ git show 3047917:tools/map_layers_smoke.mjs > T/tools/map_layers_smoke.mjs
+$ git show 3047917:web/isochrone.js           > T/web/isochrone.js
+$ node T/tools/map_layers_smoke.mjs _map_input.json
+=== isochrone.js SVG 舞台绘制路径（真实 /api/analysis 响应）===
+  FAIL 加载 isochrone.js — isochrone.js:196
+const catBoxes = Array.from(document.querySelectorAll("#categories input.cat"));
+TypeError: document.querySelectorAll is not a function
+$ echo "exit=$?  OK行数=$(… | grep -c 'OK ')"
+exit=1  OK行数=0
+```
+
+`0`，不是 `12`。
+
+**根因**：FR-104 在 `web/isochrone.js` **模块顶层**加了 `document.querySelectorAll("#categories input.cat")`，
+而冒烟脚本的 `documentStub` 只桩了 `getElementById` / `querySelector` / `createElement` / `addEventListener`——
+**桩件缺一个方法，脚本在加载阶段就死**，后面的绘制路径根本没执行到。
+
+**为什么没被发现**：那一轮 `pytest` / `ruff` / `black` / `node --check` 确实全绿，只有这条脚本没重跑，
+于是 12 这个数字是从**上一轮输出抄来的**。讽刺的是 §7.1 立的正是「自测数字也要用命令复核」这条规矩，
+**写规矩的那一轮就在这条上破了它**。
+
+**修法**：给 stub 补 `querySelectorAll: () => []`，并在注释里写明它等于「全选 + 桌面态」——
+FR-104 的勾选对账、FR-106 的抽屉接线都由 `tests/test_web_smoke.py` **对真实 HTML/CSS 断言**，
+不靠这个桩去验语义。
+
+**顺带得到一条更一般的纪律**：`grep -c 'OK '` 在崩溃的输出上照样返回一个数（这里是 `0`），
+所以复核门禁的命令必须**同时看退出码**，只看计数就分不清「跑绿了」和「跑都没跑」。
+本轮起本文引用的每个冒烟数字都按 `node … ; echo exit=$?` 的形式重跑过。
+
+### 2.12 移动端抽屉：地图高度多扣了页脚与图例；把手条轻点能开不能关
+
+FR-106 落地时在 DevTools 里真量出来的两个缺陷，都属于「代码写完、样式看着也对，但没读过几何」。
+
+**① 地图没占满首屏——扣减算重了。** 第一版 `sizeSheetStage()` 按「视口高 − 页头 − 横幅 − 图例 − 页脚」
+逐项累加，量出来 375×667 下只剩 ~240 px：抽屉做得再对也白搭。根因是把**滚动后才看得见**的块
+也算进了「首屏」扣减，而 FR-106 要的是地图占满首屏。改成只量 `.stage-area` 自己的上边界：
+
+```js
+const top = el.stageArea.getBoundingClientRect().top + window.scrollY;
+const height = Math.max(240, Math.round(window.innerHeight - top - bar));
+```
+
+量几何而不是按 class 逐个累加，好处是 `margin`、`gap` 和 `[hidden]` **已经体现在结果里**，
+不需要在 JS 里把「这块现在到底可不可见」再判一遍。
+附带一个不报错的空白：横幅显隐会改变 `top`，所以 `hideBanner()` / `setBanner()` /
+`renderQuotaNotice()` 的两个出口、加上 `renderSheets()` 本身，**五处**都要重算
+（`grep -n "sizeSheetStage()" web/isochrone.js` 可数）——漏掉的话关掉横幅后 `--map-h` 停在旧值，
+地图下方留一条横幅高的空白，**控制台一个字都不出**。
+
+**② 把手条轻点只能开、不能关。** grip 是个 `<span>`（没有 click 监听），抬手时 `moved < 6` 的轻点
+走到「按位移决定开合」的分支，位移 0 就是「保持原样」，于是永远关不掉。修成轻点按展开态取反：
+
+```js
+if (moved < 6) { openSheet(startExpanded ? "" : key); return; }
+```
+
+这也是 **D-1 那条老教训第 N 次应验**：`setPointerCapture` 会把后续 pointer 事件改投递到 capture 目标，
+所以拖拽的 `pointermove/up` 一律绑在 `window` 上，不绑元素。
+
+**③ 两条验证方法的坑**（不是代码 bug，但会让人误判「修复没生效」，所以记在这儿）：
+
+* 改了 CSS 之后 `navigate_page` 可能复用缓存的样式表，`getComputedStyle` 读回来还是旧值。
+  必须 `reload {ignoreCache: true}`，并且在信几何之前先确认那条规则**真的在 `document.styleSheets` 里**。
+* `openSheet()` 之后**立刻** `getBoundingClientRect()` 读到的是 `transition` 中途的位置：
+  414×896 那次读到 `top: 896 / translateY(643.35)`，落定后是 `top: 253 / translateY(0)`。
+  更反直觉的是**在同一个 `evaluate_script` 里 `await 400 ms` 也不会落定**——这个 headless 通道的
+  过渡帧只在 CDP 往返之间推进，所以落定态必须**分两次调用**读。本文 §6 表里那两组展开态数字都是这么量的。
 
 ---
 
@@ -681,7 +762,7 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 | 🔴 **新发现，未修**：live 等时圈的响应体 `usage` 比服务端请求级计量少记 | 同一次 `POST /api/isochrone`：`body.usage` 是 `quota_units=40 / http_requests=6`，同 `request_id` 的服务端日志是 `44 / 7`，差一个批次 | 方向是**少报**（真实花费 ≥ 报告值），所以 §6.1 的预算断言在 live 等时圈这条路径上偏乐观。mock 层两账本同源、冒烟自测抓不到。**尚未定位**是哪一批没并进 `ProbeTally`，登记为待修而不是文档口径 |
 | live 模式下 FR-221 盲区结论的**准确性** | `market` 系统性为 0，见 §4.4 | 盲区面积在 live 模式下**系统性偏大**，不能当成真实结论呈现；根因已定位在检索层，无 PRD 框架内的干净修法。**2026-10-10 定口径：接受并明示**（见 §4.4 末的决策段）——真实检索那一侧（`data_source = live` **与 `cache`**）的报告由后端 `notes` 自动带这条提示，`mock` 口径不受影响；`cache` 一起算的原因见 §2.9 |
 | `docker compose up` | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → `/api/health` + `/api/samples` + `POST /api/analysis` 可服务）。**仍未验**：compose 的起停、以及 CI 没挂 `-v` 所以「Linux 宿主 UID 1000 对 `./data` 的写权限」这条在开发机上复现不出来 |
-| 🔴 **FR-106 底部抽屉：功能未实现**（2026-10-11 登记） | `≤ 768 px` 只有单栏堆叠断点（`isochrone.css` 1100/480、`report.css` 768），没有可拖拽展开/收起的抽屉，地图也不占满首屏 | README §10.3 此前把「抽屉可展开收起」写成已按 §6.3 验收，属**不实陈述**，已就地更正。**连带未验**：PRD §6.3 的「两档视口 375×667 / 414×896 无横向滚动、无元素重叠」在 `docs/` 里没有任何可复现证据，此前也没人拍过——FR-106 落地时必须一并补 |
+| ~~🔴 **FR-106 底部抽屉：功能未实现**~~ | ✅ **2026-10-11 已实现并补验**，抽屉自身的两处缺陷见 §2.12，逐条测量见 `docs/shots/README-isochrone-acceptance.md` 的「FR-106 移动端底部抽屉」一节 | 这条 10-11 才登记为「未实现」，同日落地。PRD §6.3 的「两档视口 375×667 / 414×896 无横向滚动、无元素重叠」现在**有可复现的测量记录了**（`scrollWidth / clientWidth` 两档都是 375/375 与 414/414，逐元素热区 ≥ 44 px）。**仍未验**的是真机手感那三项（下一行）——抽屉能拖不等于手指好拖 |
 | 移动端**真机**行为 | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
 | 浏览器内真实渲染 | 本环境的无头 Chrome 无输出（被沙箱挡住） | 改用 Node + 最小 DOM 打桩真跑 `web/report.js` 与 `web/isochrone.js` 的**绘制路径**（`tools/report_dom_smoke.mjs` **15 项** + `tools/map_layers_smoke.mjs` **12 项**，`grep -c 'OK '` 实测；此前本文写 17、README/DESIGN 写 12，三处都对不上脚本真实输出，已统一），但它**不是**真实浏览器 |
 | 前端截图（**能拍、但不入库**） | 2026-10-10 起 chrome-devtools 通道能截图（实时底图与橙色真实路网线已现场目视确认） | **仍不提供 PNG**：截图必然含百度瓦片与版权条，把第三方地图影像固化进开源仓库是另一回事；本文件继续以 DOM 计数、network、状态行/tooltip 原文作证据 |
@@ -725,17 +806,27 @@ pydantic-settings 的环境变量优先级高于 `.env`，本机一旦配了真�
 打百度线上服务；而冒烟的出网守卫只装在父进程，`[E]` 段起的 uvicorn 子进程没有守卫，全靠这一手。
 CI 本来就没有 `.env`，这条改动对它无感；2026-10-10 复跑 `m1` 35/35、`m2` 102/102，守卫均未触发。
 
-### 7.1 文档里那几个「自测数字」也要用命令复核（本轮抓到三处漂移）
+### 7.1 文档里那几个「自测数字」也要用命令复核（上一轮抓到三处漂移，本轮又抓到四处）
 
 本文与 README / DESIGN 引用的**断言条数**都是手写的，而这三处早就和脚本真实输出对不上了。
-复现命令与本轮实测值：
+复现命令与实测值（**2026-10-11 全部重跑**，右两列分别是本轮值与上一轮登记的旧值）：
 
 | 数字 | 复核命令 | 实测 | 此前文档写的 |
 | --- | --- | --- | --- |
-| `report.js` 取的 DOM 节点数 | `grep -o 'getElementById("[^"]*"' web/report.js \| sed 's/.*("\(.*\)"/\1/' \| sort -u \| wc -l` | **25** | 24（README §10.4 / 本文 §1.1 / DESIGN §10 / 两个脚本的注释都写的 24） |
-| `report_dom_smoke.mjs` 断言条数 | `node tools/report_dom_smoke.mjs \| grep -c 'OK '` | **15** | 本文写 17、README/DESIGN 写 12 |
-| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12** | 12（对） |
-| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **27** | README §10.4 写 18 例（本文 §1 表的 27 是对的） |
+| `report.js` 取的 DOM 节点数 | `grep -o 'getElementById("[^"]*"' web/report.js \| sed 's/.*("\(.*\)"/\1/' \| sort -u \| wc -l` | **25** | 24（README §10.4 / 本文 §1.1 / DESIGN §10 / 两个脚本的注释都写的 24）→ 上一轮已改成 25，本轮复测仍 25 |
+| `isochrone.js` 取的 DOM 节点数 | 同上换成 `web/isochrone.js` | **59** | 58（FR-106 新增 `#sheet-bar` 及其三个 tab，散文没跟着动） |
+| `report_dom_smoke.mjs` 断言条数 | `node tools/report_dom_smoke.mjs \| grep -c 'OK '` | **15**，`exit=0` | 本文写 17、README/DESIGN 写 12 |
+| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12**，`exit=0` | 上一轮也写 12 —— 但**那个 12 是抄的**，同一提交上这条脚本崩了、`grep -c` 实返 `0`，见 §2.11 |
+| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **39** | 本文 §1 表上一轮写 27、README §10.4 写 18；FR-104 补到 31、FR-106 补到 39 |
+| `test_health_contract.py` 例数 | 同上换成该文件 | **11** | 本文 §1 表写 10（本轮重算合计时暴露，已就地改成 11） |
+| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **459** | 本文 §1 与 README 三处写 451 |
+
+**本轮新增的纪律：复核命令要连着看退出码。** `grep -c 'OK '` 在崩溃的输出上照样返回一个数（`0`），
+只比对计数分不清「跑绿了」和「跑都没跑」——§2.11 那条假数字就是这么来的。
+
+⚠️ **门禁必须用 `.venv` 而不是系统 Anaconda**：`pytest` 直接敲会走 `D:\Anaconda`，那边没装 `fastapi`，
+`tests/test_web_smoke.py` 在**收集阶段**就 `ModuleNotFoundError`，一个用例都不会跑。
+本轮就撞上过一次（`no tests collected, 1 error`），差点把「收集失败」读成「测试没变化」。
 
 顺带修掉 `tools/report_dom_smoke.mjs` 头注释里那条**照抄会失败**的用法：它写的是
 `node tools/_report_dom_smoke.mjs <report.json>`（文件名多个下划线前缀、且参数其实可省），

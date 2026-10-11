@@ -530,6 +530,8 @@ function hideBanner() {
   el.bannerMessage.textContent = "";
   el.bannerCta.textContent = "";
   clear(el.bannerDetails);
+  // 横幅在地图上方：它出现/消失都会改变 stage-area 的上边界，移动端不重量就是把地图压矮。
+  sizeSheetStage();
 }
 
 /** 当前生效的运行模式：以启动探测解析出的 `config.data_mode_in_effect` 为准（FR-105 的默认值来源）。 */
@@ -553,6 +555,7 @@ function setBanner(level, title, message, details, cta) {
     if (line) el.bannerDetails.append(node("li", null, line));
   }
   el.bannerCta.textContent = cta || "";
+  sizeSheetStage();
 }
 
 function setEngineBadge(phase, reason) {
@@ -630,6 +633,7 @@ function renderQuotaNotice() {
   const pending = state.pendingSecondRound;
   if (!pending) {
     el.quotaNotice.hidden = true;
+    sizeSheetStage();
     return;
   }
   const first = state.results[otherMode(pending.mode)];
@@ -649,6 +653,7 @@ function renderQuotaNotice() {
   const budget = budgetHint();
   if (budget) meta.push(budget);
   el.quotaMeta.textContent = `${meta.join(" ｜ ")} ｜ 本轮预计再消耗相近数量，请确认今日额度足够。`;
+  sizeSheetStage();
 }
 
 function budgetHint() {
@@ -2618,6 +2623,156 @@ if (el.catAll) {
 }
 renderCategoryHint();
 
+// ---------------------------------------------------------------------------------------------
+// FR-106 移动端底部抽屉
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * 断点只在这里写一次：CSS 侧靠 `body[data-sheet-mode="mobile"]` 跟随，不在样式表里重复 768。
+ * `report.js` 里 FR-107 的 `platform` 判定用的是同一个数，两边由 tests/test_web_smoke.py 对账。
+ */
+const SHEET_BREAKPOINT_PX = 768;
+const sheetQuery = window.matchMedia ? window.matchMedia(`(max-width: ${SHEET_BREAKPOINT_PX}px)`) : null;
+const sheetTabs = Array.from(document.querySelectorAll("#sheet-bar .sheet-tab"));
+const sheetGrip = document.getElementById("sheet-grip");
+/** 面板 id 与把手条上的 `data-sheet` / `aria-controls` 同名，靠这个键建立对应关系。 */
+const sheetPanels = sheetTabs
+  .map((tab) => ({ key: tab.dataset.sheet, tab, panel: document.getElementById(tab.dataset.sheet) }))
+  .filter((sheet) => !!sheet.panel);
+
+let sheetMode = "desktop";
+let sheetOpenKey = "";
+/** 收起后再拖上来时开哪一块：记住最后打开过的面板，而不是每次都跳回「参数」。 */
+let sheetLastKey = "controls";
+let sheetDrag = null;
+
+function isSheetMobile() {
+  return sheetMode === "mobile";
+}
+
+/**
+ * 地图可用高度 = 视口 − stage-area 的上边界 − 把手条。
+ *
+ * 🔴 刻意**不扣**页脚与图例：FR-106 要的是「地图占满首屏」，而它们本来就在首屏之下、
+ * 靠滚动才看到。把这两块也算进扣减里等于自己把地图压扁——375×667 实测扣完只剩 240 px，
+ * 抽屉做得再对也白搭。
+ * 量 stage-area 自己的上边界，比按 class 逐个累加可靠：margin、gap 和 `[hidden]`
+ * 都已经体现在几何里，不需要在 JS 里把「这块现在到底可不可见」再判一遍。
+ */
+function sizeSheetStage() {
+  if (!isSheetMobile() || !el.stageArea) return;
+  const top = el.stageArea.getBoundingClientRect().top + window.scrollY;
+  const bar = parseFloat(getComputedStyle(document.body).getPropertyValue("--sheet-bar-h")) || 52;
+  const height = Math.max(240, Math.round(window.innerHeight - top - bar));
+  el.stageArea.style.setProperty("--map-h", `${height}px`);
+}
+
+function renderSheets() {
+  document.body.dataset.sheetMode = sheetMode;
+  document.body.dataset.sheetOpen = isSheetMobile() ? sheetOpenKey : "";
+  for (const sheet of sheetPanels) {
+    sheet.tab.setAttribute("aria-expanded", isSheetMobile() && sheet.key === sheetOpenKey ? "true" : "false");
+  }
+  sizeSheetStage();
+}
+
+function openSheet(key) {
+  sheetOpenKey = key || "";
+  if (sheetOpenKey) sheetLastKey = sheetOpenKey;
+  renderSheets();
+}
+
+/** `offset` = 面板顶边距「完全展开」还差多少像素：0 = 展开，`travel` = 正好滑出屏幕下沿。 */
+function moveSheet(panel, offset) {
+  panel.style.transform = `translateY(${Math.round(offset)}px)`;
+}
+
+function sheetPointerDown(event) {
+  if (!isSheetMobile() || sheetDrag) return;
+  const key = sheetOpenKey || sheetLastKey;
+  const sheet = sheetPanels.find((item) => item.key === key);
+  if (!sheet) return;
+  const startExpanded = sheetOpenKey === sheet.key;
+  // 收起态在屏幕外，没有可拖的东西：先让它可见（位移仍等于 travel），再跟手。
+  if (!startExpanded) openSheet(sheet.key);
+  const travel = Math.max(1, sheet.panel.offsetHeight);
+  sheetDrag = {
+    id: event.pointerId,
+    startY: event.clientY,
+    panel: sheet.panel,
+    key: sheet.key,
+    travel,
+    startExpanded,
+    moved: 0,
+    offset: startExpanded ? 0 : travel,
+  };
+  sheet.panel.classList.add("sheet-dragging");
+  moveSheet(sheet.panel, sheetDrag.offset);
+}
+
+function sheetPointerMove(event) {
+  if (!sheetDrag || event.pointerId !== sheetDrag.id) return;
+  const dy = event.clientY - sheetDrag.startY;
+  sheetDrag.moved = Math.max(sheetDrag.moved, Math.abs(dy));
+  // 展开态：向下拖才动（`dy`）；收起态：向上拖才动（`travel + dy`）。
+  const raw = sheetDrag.startExpanded ? dy : sheetDrag.travel + dy;
+  sheetDrag.offset = Math.min(sheetDrag.travel, Math.max(0, raw));
+  moveSheet(sheetDrag.panel, sheetDrag.offset);
+}
+
+function sheetPointerUp(event) {
+  if (!sheetDrag || (event && event.pointerId !== sheetDrag.id)) return;
+  const { panel, key, travel, moved, offset, startExpanded } = sheetDrag;
+  panel.classList.remove("sheet-dragging");
+  panel.style.transform = "";
+  sheetDrag = null;
+  // 位移不到 6 px 就是「按了一下把手」而不是拖：抽屉按手势语义翻状态即可。
+  // 注意这里不会和 click 打架——`pointerdown` 只绑在把手 `<span>` 上，三个 tab 的
+  // `click` 各自独立，把手上没有第二个监听器。
+  if (moved < 6) {
+    openSheet(startExpanded ? "" : key);
+    return;
+  }
+  openSheet(offset < travel / 2 ? key : "");
+}
+
+if (sheetGrip) {
+  sheetGrip.addEventListener("pointerdown", sheetPointerDown);
+  // 🔴 `pointermove` / `pointerup` 挂在 **window** 而不是挂把手上：D-1 那次的教训
+  //    （见上方 `el.stage` 的注释）是「指针事件会跟着捕获者走」，把手只有 ~104 px 宽，
+  //    手指一滑出它就断流——抽屉拖到一半停住比不拖更糟。窗口层监听 + `moved < 6` 的
+  //    点击阈值，既跟得住手也不会把一次拖拽误记成两次开合。
+  window.addEventListener("pointermove", sheetPointerMove);
+  window.addEventListener("pointerup", sheetPointerUp);
+  window.addEventListener("pointercancel", sheetPointerUp);
+}
+
+for (const sheet of sheetPanels) {
+  sheet.tab.addEventListener("click", () => openSheet(sheetOpenKey === sheet.key ? "" : sheet.key));
+}
+
+function syncSheetMode() {
+  const next = sheetQuery && sheetQuery.matches ? "mobile" : "desktop";
+  if (next !== sheetMode) {
+    sheetMode = next;
+    if (sheetMode !== "mobile") {
+      // 回桌面：内联位移与开合状态全部交还给三栏布局，别把一个 `translateY` 留在面板上。
+      sheetOpenKey = "";
+      for (const sheet of sheetPanels) sheet.panel.style.transform = "";
+      // `--map-h` 只有移动端规则会读，但留着会让「转到桌面又转回移动端」时先套一次旧值。
+      if (el.stageArea) el.stageArea.style.removeProperty("--map-h");
+    }
+  }
+  renderSheets();
+}
+
+if (sheetQuery) {
+  if (sheetQuery.addEventListener) sheetQuery.addEventListener("change", syncSheetMode);
+  else if (sheetQuery.addListener) sheetQuery.addListener(syncSheetMode); // 老 Safari 只认这条
+}
+window.addEventListener("resize", syncSheetMode);
+syncSheetMode();
+
 // SVG 舞台交互：pointer 事件（R15：不写 touch* 分支）
 let drag = null;
 el.stage.addEventListener("pointerdown", (event) => {
@@ -2674,7 +2829,11 @@ el.stage.addEventListener(
 );
 el.stage.addEventListener("dblclick", () => renderAll(true));
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") hideTooltip();
+  if (event.key !== "Escape") return;
+  hideTooltip();
+  // FR-106：Escape 收起抽屉。tooltip 与抽屉共用同一个键，先后顺序不重要——
+  // 两者都在「当前最靠近指针/焦点的那一层」，同时收掉符合直觉。
+  if (isSheetMobile() && sheetOpenKey) openSheet("");
 });
 
 window.addEventListener("resize", () => {
@@ -2847,6 +3006,15 @@ window.CircleDocMap = {
     if (el.progressFill) el.progressFill.style.width = "0%";
   },
   isLiveMap: () => state.jsapi.phase === "live",
+  /**
+   * FR-106：移动端抽屉的开合。`report.js` 在体检成功后调 `openSheet("report")`，
+   * 让报告浮到地图上方——手机上「跑完了但内容在屏幕外」是最容易被当成失败的形态。
+   * 桌面是空操作（三栏本来就在屏幕上），所以调用方不需要先判断视口。
+   */
+  openSheet: (key) => {
+    if (isSheetMobile()) openSheet(key);
+  },
+  isSheetMobile: () => isSheetMobile(),
   constants: { MODE_LABEL, DATA_SOURCE_LABEL, DATA_MODE_LABEL },
 };
 
@@ -2867,6 +3035,8 @@ async function boot() {
   renderVerticesTable(null);
   setEngineBadge("svg", jsapiWanted().reason);
   await loadHealth();
+  // FR-106：`loadHealth()` 可能刚把降级横幅亮起来，地图可用高度跟着变，重算一次。
+  syncSheetMode();
   if (jsapiWanted().use) {
     const ok = await tryEnableLiveMap();
     if (!ok) renderAll(true);
