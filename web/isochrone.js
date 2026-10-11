@@ -29,6 +29,7 @@
 const HEALTH_PATH = "/api/health";
 const GEOCODE_PATH = "/api/geocode";
 const REGEO_PATH = "/api/regeo";
+const SUGGEST_PATH = "/api/suggest";
 const ISOCHRONE_PATH = "/api/isochrone";
 const POLYLINE_PATH = "/api/isochrone/polyline";
 
@@ -140,6 +141,8 @@ const el = {
   lat: document.getElementById("lat"),
   addr: document.getElementById("addr"),
   city: document.getElementById("city"),
+  suggestOn: document.getElementById("suggest-on"),
+  suggestList: document.getElementById("suggest-list"),
   centerReadout: document.getElementById("center-readout"),
   centerAddress: document.getElementById("center-address"),
   browserAk: document.getElementById("browser-ak"),
@@ -273,6 +276,10 @@ const state = {
   // pending 挡住同一坐标的重复在飞请求；seq 是在飞响应的世代号，连点换点时只认最新那份
   // —— 和 runSeq / polylineSeq 同一个思路。
   address: { pending: "", seq: 0, cache: new Map() },
+  // FR-108：地址联想。timer 是 500 ms 防抖的句柄（边打字边问 = 每改一个字就烧一次检索配额）；
+  // cache 键是 `城市|关键字`，同一个词反复删改只问一次；seq 同 FR-103 的世代号；
+  // items/active 是列表内容与键盘高亮位（-1 = 还没选中任何一行）。
+  suggest: { timer: 0, pending: "", seq: 0, cache: new Map(), items: [], active: -1 },
   minutes: 15,
   results: { walking: null, riding: null }, // FR-206：两模式结果都留着，用于叠加对比
   activeMode: "walking",
@@ -2041,7 +2048,7 @@ function straightDistance(lnglat) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 请求：/api/health /api/geocode /api/regeo /api/isochrone /api/isochrone/polyline
+// 请求：/api/health /api/geocode /api/regeo /api/suggest /api/isochrone /api/isochrone/polyline
 // ---------------------------------------------------------------------------------------------
 
 async function readJson(response) {
@@ -2199,6 +2206,182 @@ function readGeoLnglat(body) {
   const location = body.result && body.result.location;
   const shaped = pair([location && location.lng, location && location.lat]);
   return shaped;
+}
+
+// ---------------------------------------------------------------------------------------------
+// FR-108 地址联想：/api/suggest（内部 /place/v2/suggestion）
+// ---------------------------------------------------------------------------------------------
+
+const SUGGEST_MIN_KEYWORD_LEN = 3;
+// 与后端 `services/geo.SUGGEST_MIN_KEYWORD_LEN` 同值：两边算法不一致会出现「前端放行了、
+// 接口回 400」。门槛存在的理由是它与地点检索共用每日 100 次配额（笔记 FAQ 2540 / 2549）。
+
+const SUGGEST_DEBOUNCE_MS = 500;
+// PRD FR-108 原文要求的防抖时长。
+
+function codePointLength(value) {
+  // 后端数的是 Python `len()`（码点），`String.length` 数的是 UTF-16 单元：一个 emoji 或生僻字
+  // 会被算成 2，于是「前端觉得够了、后端 400」。用 Array.from 对齐。
+  return Array.from(value || "").length;
+}
+
+function suggestBlockReason(word, region) {
+  if (codePointLength(word) < SUGGEST_MIN_KEYWORD_LEN) return "short";
+  if (!region) return "need_region";
+  return "";
+}
+
+function setSuggestState(value) {
+  el.suggestList.dataset.state = value;
+  // 列表可见 ⇔ aria-expanded，两个状态分开维护就会出现「读屏说有弹层、屏幕上什么都没有」。
+  el.addr.setAttribute("aria-expanded", value === "none" ? "false" : "true");
+  // 候选列表是**文档流里**的一块，不是浮层：移动端抽屉（FR-106）里 `#controls` 自己滚动，
+  // 输入框下方 40 px 就是抽屉底沿，不滚一下就等于「打字有反应、候选看不见」。
+  // `block: "nearest"` 只在真的在视口外时才动，已经看得见就是空操作。
+  if (value !== "none") el.suggestList.scrollIntoView({ block: "nearest" });
+}
+
+function closeSuggest() {
+  clear(el.suggestList);
+  state.suggest.items = [];
+  state.suggest.active = -1;
+  setSuggestState("none");
+}
+
+function renderSuggestNote(kind, text) {
+  clear(el.suggestList);
+  el.suggestList.appendChild(node("li", "suggest-note", text));
+  state.suggest.items = [];
+  state.suggest.active = -1;
+  setSuggestState(kind);
+}
+
+function suggestOption(item, index) {
+  const row = node("li", "suggest-item");
+  row.setAttribute("role", "option");
+  row.setAttribute("aria-selected", "false");
+  row.dataset.index = String(index);
+  row.appendChild(node("span", "suggest-name", item.name));
+  const where = [item.city, item.district].filter(Boolean).join(" ");
+  if (where) row.appendChild(node("span", "suggest-part", where));
+  // 坐标一并铺出来：候选项最终就是落点，评审与用户都能核对「点下去会落到哪」。
+  row.appendChild(node("span", "suggest-part", `${item.lnglat[0].toFixed(5)}, ${item.lnglat[1].toFixed(5)}`));
+  return row;
+}
+
+function renderSuggest(body) {
+  const items = (Array.isArray(body.items) ? body.items : []).filter((item) => pair(item && item.lnglat));
+  if (!items.length) {
+    // 后端已经把没坐标和境外的条目丢过了；这里再挡一次形状漂移，宁可回一句「没有候选」，
+    // 也不给一行「点了没反应」的候选。
+    renderSuggestNote("empty", String(body.message || "没有匹配的联想结果，再输入几个字试试。"));
+    return;
+  }
+  clear(el.suggestList);
+  state.suggest.items = items;
+  state.suggest.active = -1;
+  items.forEach((item, index) => el.suggestList.appendChild(suggestOption(item, index)));
+  setSuggestState("ok");
+}
+
+function onAddrInput() {
+  clearTimeout(state.suggest.timer);
+  if (!el.suggestOn.checked) {
+    // 🔴 默认关闭这一半由前端把住：开关没勾就**一个请求都不发**，而不是发出去让后端拒绝。
+    closeSuggest();
+    return;
+  }
+  state.suggest.timer = setTimeout(fetchSuggestions, SUGGEST_DEBOUNCE_MS);
+}
+
+async function fetchSuggestions() {
+  const word = el.addr.value.trim();
+  const region = el.city.value.trim();
+  const blocked = suggestBlockReason(word, region);
+  if (blocked) {
+    renderSuggestNote(
+      blocked,
+      blocked === "short"
+        ? `再输入几个字（当前 ${codePointLength(word)} 字，门槛 ${SUGGEST_MIN_KEYWORD_LEN} 字）：太短的关键字召回一大片，白烧一次检索配额。`
+        : "联想需要城市：官方把 region 列为必选参数。请在上面的「城市」里填一个，如「北京」。",
+    );
+    return;
+  }
+  const key = `${region}|${word}`;
+  const cached = state.suggest.cache.get(key);
+  if (cached) {
+    renderSuggest(cached);
+    return;
+  }
+  if (state.suggest.pending === key) return; // 同一个词的请求还在飞，不重复占桶
+  state.suggest.pending = key;
+  const seq = (state.suggest.seq += 1);
+  renderSuggestNote("pending", `正在联想「${word}」…`);
+  try {
+    const params = new URLSearchParams({ keyword: word, region });
+    if (el.dataMode.value) params.set("data_mode", el.dataMode.value);
+    const response = await fetch(`${SUGGEST_PATH}?${params.toString()}`);
+    const body = await readJson(response);
+    if (seq !== state.suggest.seq) return; // 关键字又变了：这批候选已经不属于当前输入
+    if (!response.ok) {
+      throw new Error((body && body.error && body.error.message) || `http_${response.status}`);
+    }
+    // 只有「真的问过百度」的那两类结果才值得留下：把 mock / 未启用的提示缓存下来，
+    // 用户随后开了 `SUGGEST_ENABLED` 也要到刷新才看得到候选。
+    if (body.data_source === "live" || body.data_source === "cache") state.suggest.cache.set(key, body);
+    renderSuggest(body);
+  } catch (error) {
+    if (seq !== state.suggest.seq) return;
+    renderSuggestNote(
+      "error",
+      `联想未完成：${error && error.message ? error.message : String(error)}。` +
+        "地址搜索与坐标取点不受影响。",
+    );
+  } finally {
+    if (state.suggest.pending === key) state.suggest.pending = "";
+  }
+}
+
+function moveSuggestActive(delta) {
+  const count = state.suggest.items.length;
+  if (!count) return false;
+  const last = count - 1;
+  const next =
+    state.suggest.active < 0
+      ? delta > 0
+        ? 0
+        : last
+      : (state.suggest.active + delta + last + 1) % (last + 1);
+  state.suggest.active = next;
+  Array.from(el.suggestList.children).forEach((row, index) =>
+    row.setAttribute("aria-selected", String(index === next)),
+  );
+  return true;
+}
+
+function chooseSuggestion(index) {
+  const item = state.suggest.items[index];
+  if (!item) return;
+  el.addr.value = String(item.name); // 直接赋值不触发 input 事件，不会绕回来再问一次
+  closeSuggest();
+  setCenter(item.lnglat, `联想选中「${item.name}」`, "fly"); // PRD FR-108：flyTo 并落点
+}
+
+function onSuggestToggle() {
+  clearTimeout(state.suggest.timer);
+  if (!el.suggestOn.checked) {
+    closeSuggest();
+    return;
+  }
+  const word = el.addr.value.trim();
+  const region = el.city.value.trim();
+  const blocked = suggestBlockReason(word, region);
+  if (blocked) {
+    // 刚勾上就先说清下一步要什么，而不是留一个空列表等 500 ms 才冒字。
+    fetchSuggestions();
+    return;
+  }
+  state.suggest.timer = setTimeout(fetchSuggestions, SUGGEST_DEBOUNCE_MS);
 }
 
 function pendingRun() {
@@ -2516,7 +2699,7 @@ function rerenderAfterPath() {
 // 中心点 / 事件 / 启动
 // ---------------------------------------------------------------------------------------------
 
-function setCenter(lnglat, note_) {
+function setCenter(lnglat, note_, mapHop) {
   const value = pair(lnglat);
   if (!value) {
     el.centerReadout.textContent = "坐标无效：请按「经度,纬度」（BD09LL）填写，例如 116.4074,39.9042。";
@@ -2532,7 +2715,11 @@ function setCenter(lnglat, note_) {
   fetchCenterAddress(value); // 不 await：地址只是回显，不许拖住等时圈与地图平移
   if (state.jsapi.phase === "live" && state.jsapi.map) {
     try {
-      state.jsapi.map.panTo(new state.jsapi.bmap.Point(value[0], value[1]));
+      const point = new state.jsapi.bmap.Point(value[0], value[1]);
+      // FR-108 选中候选项时走 flyTo（PRD 原文「选中后地图 flyTo 并落点」）。本机没有浏览器 AK、
+      // 实时底图跑不了，所以留一条 panTo 退路而不是把 flyTo 当硬依赖。
+      if (mapHop === "fly" && typeof state.jsapi.map.flyTo === "function") state.jsapi.map.flyTo(point);
+      else state.jsapi.map.panTo(point);
     } catch (error) {
       /* 平移失败时保持当前视野 */
     }
@@ -2625,8 +2812,37 @@ el.lat.addEventListener("keydown", (event) => {
 });
 el.resetCenter.addEventListener("click", () => setCenter(DEFAULT_CENTER.slice(), "已回到默认中心点（北京）"));
 el.geocode.addEventListener("click", runGeocode);
+el.addr.addEventListener("input", onAddrInput);
+el.suggestOn.addEventListener("change", onSuggestToggle);
+// 点候选行时先别让输入框失焦：blur 会把列表清掉，click 就落在空列表上了。
+el.suggestList.addEventListener("mousedown", (event) => event.preventDefault());
+el.suggestList.addEventListener("click", (event) => {
+  const row = event.target && event.target.closest ? event.target.closest(".suggest-item") : null;
+  if (row) chooseSuggestion(Number(row.dataset.index));
+});
+el.addr.addEventListener("blur", closeSuggest);
 el.addr.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") runGeocode();
+  if (event.key === "ArrowDown") {
+    if (moveSuggestActive(1)) event.preventDefault();
+    return;
+  }
+  if (event.key === "ArrowUp") {
+    if (moveSuggestActive(-1)) event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape") {
+    closeSuggest();
+    return;
+  }
+  if (event.key === "Enter") {
+    // 有选中行时联想优先（FR-108），没有才落回手动地理编码（FR-101 方式②）。
+    if (state.suggest.active >= 0) {
+      event.preventDefault();
+      chooseSuggestion(state.suggest.active);
+      return;
+    }
+    runGeocode();
+  }
 });
 el.pickPoint.addEventListener("click", () => setPickMode(!state.pickMode));
 el.recenter.addEventListener("click", () => renderAll(true));

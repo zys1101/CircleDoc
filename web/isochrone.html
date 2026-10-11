@@ -90,12 +90,29 @@
           </p>
           <label class="field">
             <span>地址文本（走 /api/geocode）</span>
-            <input type="text" id="addr" autocomplete="off" placeholder="如 北京市朝阳区温宿路北口" />
+            <input
+              type="text"
+              id="addr"
+              autocomplete="off"
+              role="combobox"
+              aria-expanded="false"
+              aria-controls="suggest-list"
+              aria-autocomplete="list"
+              placeholder="如 北京市朝阳区温宿路北口"
+            />
           </label>
           <label class="field">
-            <span>城市（可选，提高解析精度）</span>
+            <span>城市（可选，提高解析精度；开启联想后必填）</span>
             <input type="text" id="city" autocomplete="off" placeholder="如 北京" />
           </label>
+          <!-- FR-108：中文联想。**默认关闭**——`/place/v2/suggestion` 与地点检索共用
+               每日 100 次配额（笔记 FAQ 2540 / 2549），开着它等于让输入框替用户烧检索额度。
+               后端还有一道 `SUGGEST_ENABLED`（默认 false），两边任一关着都不会出网。 -->
+          <label class="check">
+            <input type="checkbox" id="suggest-on" />
+            <span>输入联想（FR-108：默认关闭 · 与地点检索共用 100 次/日 配额）</span>
+          </label>
+          <ul class="suggest-list" id="suggest-list" role="listbox" data-state="none"></ul>
           <p class="actions"><button type="button" id="geocode">地址搜索取点</button></p>
           <p class="hint" id="center-readout">中心点：未设定。</p>
           <!-- FR-103：中心点的结构化地址。内容一律来自 /api/regeo 的响应；取不到就照实写取不到，

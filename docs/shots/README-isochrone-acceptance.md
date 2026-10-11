@@ -608,6 +608,103 @@ GET http://127.0.0.1:8801/api/regeo?lnglat=116.4074%2C39.9042   [200]
   两条 node 冒烟的输出 `.smoke1.txt` / `.smoke2.txt`。`git status --short` 只剩本轮 7 个预期改动文件。
 - chrome-devtools 设备模拟从 `375x667x2,mobile,touch` 复位回 `1280x800x1`。
 
+## FR-108 地址联想 · 零出网七例实测（2026-10-11，实现人自验，零出网）
+
+PRD FR-108 原文：「地址输入框支持中文搜索联想，走 `/api/suggest`（内部 `/place/v2/suggestion`），
+**不复用 `/api/geocode`**；选中后地图 flyTo 并落点」，门槛四条：
+「输入 ≥ 3 字 + 防抖 500 ms + 结果本地缓存 + **默认关闭、可手动开启**」。
+这一轮验的是**四条门槛在浏览器里真的成立**，以及「默认关闭」这一半到底是谁把住的。
+
+### 0. 前提与零出网自证
+
+- 服务：`BAIDU_SERVER_AK= BAIDU_BROWSER_AK= ./.venv/Scripts/python.exe -m uvicorn api.app:app --host 127.0.0.1 --port 8803`
+  （`pid=10500`）。两个 AK 用**空环境变量**压住：pydantic-settings 的环境变量优先级高于 `.env`，
+  本机 `.env` 里有真实 AK，不显式压住就会**真的**打百度线上服务。
+- `GET /api/health` 实测：`status=offline`、`ok=true`、`baidu_reachable=false`、
+  `server_ak_type=not_configured`、`browser_ak_type=not_configured`、`services_enabled.*` 六项全 `false`。
+- 后端侧先 curl 一条（`GET /api/suggest?keyword=温特豪德&region=北京`）：HTTP **200**、
+  `request_id 786098ff106f4f6f`、`x-http-requests: 0`、`x-place-calls: 0`、`x-quota-units: 0`、
+  `content-length: 663`，body `ok=false / degraded_reason=mock_mode / data_source=sample / usage.* 全 0`。
+  **200 而不是 4xx** 是 FR-403 的口径：关闭与降级都是**结论**，不是异常。
+- 浏览器侧的零出网证据是**每条 `/api/suggest` 响应头里的 `x-http-requests: 0`**（§1 的 E 例逐字贴出），
+  加上「A/B/C/D 四例 Network 面板里根本没有 suggest 请求」这件事本身。
+
+### 1. 七例（A–E 打真实服务，F/G 把 `window.fetch` 换成返回真实响应形状的桩）
+
+页面 `http://127.0.0.1:8803/isochrone.html`，桌面视口起步，G 例之后切 375×667。
+「请求数」一列是页内 `fetch` 包装器记下的**这条链上**的计数，与 DevTools Network 面板对得上。
+
+| # | 操作 | 实测 | 判定 |
+| --- | --- | --- | --- |
+| **A** | 首屏加载后什么都不做 | `#suggest-on.checked=false`、`#suggest-list` `data-state="none"`、`#addr` `aria-expanded="false"`、列表 `display:none` 且 `0×0` | ✅ 默认关闭：连渲染都是收起的 |
+| **B** | 开关**不勾**，地址填「温特豪德」、城市填「北京」，等 900 ms（> 防抖 500 ms） | `data-state="none"`、`children.length=0`、**suggest 请求数 0** | ✅ 「默认关闭」是**前端**把住的：不是发出去被后端拒，而是根本没发 |
+| **C** | 勾上开关，地址只留 2 字「温特」 | `data-state="short"`、`aria-expanded="true"`、一行 `.suggest-note`：「再输入几个字（当前 2 字，门槛 3 字）：太短的关键字召回一大片，白烧一次检索配额。」、**请求数 0** | ✅ ≥3 字门槛在本地生效且文案说清了为什么 |
+| **D** | 地址 3 字「温特豪德」、**城市清空** | `data-state="need_region"`、note「联想需要城市：官方把 region 列为必选参数。请在上面的「城市」里填一个，如「北京」。」、**请求数 0** | ✅ `region` 官方必选，不把它留给线上 `status=2` |
+| **E** | 城市「北京」+ 地址「温特豪」 | **1 条真实请求** `GET /api/suggest?keyword=%E6%B8%A9%E7%89%B9%E8%B1%AA&region=%E5%8C%97%E4%BA%AC` → `reqid=10`、`200`、`x-elapsed-ms: 2`、`x-http-requests: 0`、`x-place-calls: 0`、`x-quota-units: 0`、`x-request-id: 81a1cc89dac349ed`、`content-length: 660`；列表 `data-state="empty"`，原样铺后端 `message`（「当前为离线（mock）模式…该查询暂无可用的合成示例数据…」） | ✅ 门槛齐了才真问；`mock` 下**没有候选但不报错** |
+| **F** | `window.fetch` 换成桩：返回 4 条候选，其中**一条没有 `location`** | 渲染 **3** 行（无坐标那条被 `pair(item.lnglat)` 丢掉）、每行 `role="option"`、`aria-selected="false"`、文案 = 名称 + `市 区` + `116.45200, 39.91050`；桩只被调 **1** 次 | ✅ 候选只来自响应，且**每一行都能落点** |
+| **G** | 键盘 + 点选 + 缓存 + 世代号 + 错误态（见 §2） | 全部符合预期 | ✅ |
+
+整页请求数在 E 例之后是 **4 条**：`reqid=7 /api/regeo`、`8 /api/health`、`9 /api/samples`、`10 /api/suggest`。
+也就是说这一轮**没有多出一条**出网请求，`x-http-requests: 0` 与 §0 的 curl 同口径。
+
+### 2. G 例拆开看：五件事各自有独立证据
+
+| 子项 | 操作 | 实测 |
+| --- | --- | --- |
+| 键盘四键 | 候选 3 行时连按 ArrowDown / ArrowDown / ArrowUp | `aria-selected` 依次 `[true,false,false]` → `[false,true,false]` → `[true,false,false]` |
+| Enter 的归属 | 有选中行时按 Enter | 落点：`#lng=116.452000`、`#lat=39.910500`，状态行「中心点：116.45200, 39.91050（BD09LL）｜ 联想选中「国贸商城」」，列表回 `none`、`aria-expanded=false`，**没有再问一次 suggest**，顺带发了 1 条 `/api/regeo`（FR-103 那半边接着工作） |
+| Enter 不被吞 | 列表空、无选中行时按 Enter | `GET /api/geocode?address=望京花园&city=北京` → 200，状态行「地址搜索未完成：当前为离线（mock）模式…。已保留原中心点。」——**FR-101 方式②没有被联想接管** |
+| 点选（鼠标路径） | 在第 3 行派发 `mousedown` + `click` | `mousedown` 的 `dispatchEvent` 返回 **false**（监听器确实 `preventDefault()` 了，输入框不失焦）；落点 `116.461400, 39.908600`，地址框回填「国贸地铁站」，suggest 计数 **0 增量** |
+| 缓存与键 | 同词同城市再打一次 → 再把城市改成「上海」 | 第一次：**3 行候选来自前端缓存，桩调用数仍是 1**（不再发）；换城市：桩调用数 → **2**，URL 变成 `region=%E4%B8%8A%E6%B5%B7`。缓存键确实是 `${region}|${keyword}` |
+| 世代号 | 慢响应（900 ms）在飞时改关键字触发快响应 | 时间轴：慢请求 `+513 ms` 发出、快请求 `+1209 ms` 发出并立即返回、慢响应 `+1413 ms` 到达 → **被丢弃**，最终列表只有「新鲜候选乙」，`data-state="ok"` |
+| 错误态 | 桩回 503 + 错误信封 | `data-state="error"`、note「联想未完成：上游暂时不可用（模拟）。地址搜索与坐标取点不受影响。」、`.suggest-note` 计算色 **`rgb(169, 100, 10)`**（与 FR-103 地址错误同色）；按 Escape → `none\|false` |
+| 关掉开关 | 取消勾选后再打字 | `data-state="none"`、`children.length=0`、之后的打字**桩调用 0** |
+
+整轮 console **零消息**（`list_console_messages` 返回 `<no console messages found>`）。
+
+### 3. 几何：375×667 抽屉（FR-106 同口径）与桌面 1540×732
+
+| 视口 | 指标 | 实测 |
+| --- | --- | --- |
+| 桌面 1540×732 | 列表 / 三行高 / 与下一块间距 | `249×178`，行高 `59 / 59 / 58`，`gapToNext 12`，`documentElement.scrollWidth 1525 < 1540` |
+| 桌面（真实流程：先把输入框滚进视口再打字） | 页面是否被弹层顶走 | `window.scrollY` 前后都是 **386**（`jump 0`），列表 `top 535 / bottom 714` 本来就在视口内 |
+| 移动 375×667（`deviceScaleFactor 3`、`hasTouch`） | 候选行热区 | 高 `44 / 66 / 44`，`min-height: 44px`、`font-size: 14px`、`align-items: center`（PRD §6.3 的 44 px 达标） |
+| 移动 | 横向溢出 | `documentElement.scrollWidth = 375 = innerWidth`，**没撑出横向滚动** |
+| 移动 | 列表是否看得见 | **修前**：`#controls` 是滚动容器（`clientHeight 440` / `scrollHeight 2653`），`#addr` 在 `top 568`，列表在 `top 742 / bottom 897`——**整块在 667 视口之外**；**修后**：`#controls.scrollTop` `0 → 282`，列表 `top 460 / bottom 615` 完整可见 |
+
+那一处「修后」是本轮抓出的唯一缺陷，正文见 [`docs/TEST_REPORT.md`](../TEST_REPORT.md) §2.14：
+候选列表是**文档流**里的 `<ul>` 而不是浮层，所以在移动端抽屉里必须自己 `scrollIntoView({block:"nearest"})`。
+同一句在桌面是空操作（上表第二行），所以它不是「为了移动端把桌面搞抖」的补丁。
+
+### 4. 本轮**没有**验的（别当成已验）
+
+1. 🔴 **`/place/v2/suggestion` 的真实返回体形状从未核对过**。`docs/BAIDU_API_NOTES.md` §2.4 那一节
+   **只记了请求参数、没记响应字段**，`_parse_suggest` 里的 `name` / `location` / `city` / `district` /
+   `adcode` / `province` 是按同类接口推的，`tests/test_geo_api.py` 用的是**自造桩件**。
+   对不上时的表现是「列表永远空」这种安静失败。核对要烧「地点输入提示与检索**共用** 100 次/日」池子里的 1 次，
+   **等用户点头才跑**。
+2. **F/G 两例的候选列表是 `window.fetch` 打桩量的**，不是真实响应。E 例那条真请求只证明了
+   「门槛齐了才发、发出后 200、`x-http-requests: 0`、后端 message 能铺出来」。
+3. **`flyTo` 没在真实底图上跑过**：本机这轮把 `BAIDU_BROWSER_AK` 压成空，JSAPI 起不来，
+   `setCenter()` 走的是 `panTo` 退路（`typeof state.jsapi.map.flyTo === "function"` 守卫由
+   `tests/test_web_smoke.py` 断言它在，但**没验过真飞**）。
+4. **中文输入法（IME）组合输入没测**：CDP 走的是直接改 `value` + 派发 `input`，
+   真实拼音输入会在 composition 期间连续触发 `input`。防抖 500 ms 挡住了大部分，
+   但「composition 中每键都算一次输入」这件事未在浏览器里量过。
+5. `data_source="cache"` 这一态在浏览器里**一次都没出现**（本地 mock 后端拿不到缓存态），
+   只有 `tests/test_geo_api.py::test_second_identical_suggest_is_served_from_cache` 与
+   `..._switching_the_flag_off_keeps_the_cache_readable` 两条接口级用例覆盖。
+6. 触摸是真手指还是 CDP 合成？——**CDP 合成**（`isMobile` + `hasTouch` 模拟），惯性、长按、
+   软键盘顶起视口这三项未测。
+
+### 5. 收尾
+
+- 本轮起的 `uvicorn api.app:app --port 8803`（`pid=10500`）已 `taskkill`，
+  `netstat -ano | grep -c '880[0-9].*LISTENING'` 实测 **0**。
+- 临时文件全部删除：`.fr108-scratch/`（curl 输出与两条 node 冒烟的日志）、`_map_input.json`（96 784 字节，
+  为 FR-108 改过 `isochrone.js` 后复跑 `map_layers_smoke` 而生成，12 项 `exit=0`）。
+- chrome-devtools 设备模拟：本轮从 `1540x732x1` → `375x667x3,mobile,touch` → 回到 `1280x800x1`。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。
@@ -617,6 +714,9 @@ GET http://127.0.0.1:8801/api/regeo?lnglat=116.4074%2C39.9042   [200]
 5. ~~截图证据全部未落地（in-app browser 无可见 surface）~~ → 2026-10-10 起 chrome-devtools 通道**能**截图，
    但按上一节「关于截图」的口径仍**不提供 PNG**，本文件继续以 DOM/计算样式/network/console 文字证据为准。
    早先那条 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE` 限制属 browser-use 通道，与本轮用的 chrome-devtools 不是同一条路径。
+6. **FR-108 的中文输入法路径**——真机上拼音是 composition 期间连续触发 `input`，且软键盘顶起视口会改变
+   `#controls` 的可视高度；本轮 CDP 走的是「直接改 `value` + 派发 `input`」，两者都不等于真机键盘。
+   逐条边界见上面「FR-108 地址联想」§4。
 
 ## 收尾
 
@@ -637,3 +737,6 @@ GET http://127.0.0.1:8801/api/regeo?lnglat=116.4074%2C39.9042   [200]
   都已 `taskkill`，`netstat -ano | grep -c '880[0-9].*LISTENING'` 两次实测都是 **0**；
   `.t103-health.json` / `.t103-regeo.json` / `.t103-server.log` / `.t103b.log` / `_map_input.json` /
   `.smoke1.txt` / `.smoke2.txt` 全部删除，设备模拟复位 `1280x800x1`。逐条见上面「FR-103 中心点地址回显」§5。
+- FR-108 那一轮（2026-10-11，同日）起的 `8803`（联想七例）已 `taskkill`（`pid=10500`），
+  `netstat -ano | grep -c '880[0-9].*LISTENING'` 实测 **0**；`.fr108-scratch/` 与复跑冒烟用的
+  `_map_input.json` 已删除，设备模拟复位 `1280x800x1`。逐条见上面「FR-108 地址联想」§0 ~ §5。

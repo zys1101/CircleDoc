@@ -1,10 +1,11 @@
-"""`/api/geocode` 与 `/api/regeo` 的**接口级**单测（PRD §4.7 出参契约 / FR-103 回显）。
+"""`/api/geocode`、`/api/regeo`、`/api/suggest` 的**接口级**单测（FR-103 / FR-108）。
 
-为什么单独立一个文件：这两条路由此前只在 `api/health.py` 的启动探测里被间接触碰过，
-`tests/` 里没有任何一条用例真正 GET 过 `/api/regeo`。而 FR-103 把这条链推到了前台——
-`web/isochrone.js` 现在每次换中心点都会请求它，并把 `district` / `town` / `street` /
-`adcode` 直接铺到面板上。响应形状一旦漂移，前端不会报错，只会把地址行渲染成空态，
-而用户会以为「这个位置就是查不到地址」。
+为什么单独立一个文件：这三条路由此前只在 `api/health.py` 的启动探测里被间接触碰过，
+`tests/` 里没有任何一条用例真正 GET 过 `/api/regeo` 或 `/api/suggest`。而 FR-103 与 FR-108
+把这两条链推到了前台——`web/isochrone.js` 现在每次换中心点请求 `/api/regeo`，把
+`district` / `town` / `street` / `adcode` 直接铺到面板上；地址输入框则边打字边问 `/api/suggest`。
+响应形状一旦漂移，前端不会报错，只会把地址行渲染成空态、把联想列表渲染成空的，
+而用户会以为「这个位置就是查不到地址」「这功能不认我的小区」。
 
 🔴 零真实出网：与 `tests/test_isochrone_api.py` 用同一个口子（`api/geo.py:38` 的
 `app.state.geo_service` 优先），注入的是**真实** `BaiduClient` + `httpx.MockTransport`，
@@ -12,14 +13,16 @@
 （条款 3.2.3(ii) 禁止对线上服务施压）。每条用例都另断言 `transport.calls`，
 「根本没被叫到」比「叫到了但是假的」更能证明没出网。
 
-本文件盯的四类问题：
+本文件盯的五类问题：
   ① **平铺形状**：§4.7 的出参在顶层（`GeoOutcome.as_dict()` 不套 `data` 层），
      前端 `renderAddressLine()` 就是按顶层取的；
   ② **字段来源**：`town` / `district` / `adcode` 只能来自官方 `addressComponent`，
      绝不从 `formatted_address` 文本切分（PRD §4.7 末尾专门禁止）；
   ③ **坐标顺序**：入参 `lnglat` 是经度在前，发给百度的 `location` 是纬度在前（R8）；
   ④ **降级说人话**：mock / 空 results 一律 **200 + `empty` + 可读 `message`**，
-     而且**不造假地址**——「这个坐标查不到」和「编一个像样的地址」是两回事。
+     而且**不造假地址**——「这个坐标查不到」和「编一个像样的地址」是两回事；
+  ⑤ **配额门槛**（FR-108）：联想**默认关闭**、`region` 必选、关键字 ≥ 3 字，三道门都挡在
+     出网之前，而开启的那一次必须记进 `place_calls`——它与地点检索同池，记错栏就等于没人看见消耗。
 """
 
 from __future__ import annotations
@@ -38,7 +41,16 @@ from infra.cache_store import CacheStore
 from infra.config import Settings
 from infra.metrics import Metrics
 from infra.ratelimit import FakeClock, RateLimitRegistry
-from services.geo import MSG_CACHE_HIT, MSG_EMPTY_REGEO, MSG_MOCK_MODE, GeoService
+from services.geo import (
+    MSG_CACHE_HIT,
+    MSG_EMPTY_REGEO,
+    MSG_EMPTY_SUGGEST,
+    MSG_MOCK_MODE,
+    MSG_SAMPLE_UNAVAILABLE,
+    MSG_SUGGEST_OFF,
+    GeoService,
+    suggest_enabled,
+)
 
 CENTER = "116.404,39.915"
 """「经度,纬度」——与前端 `state.center` 交给 `/api/regeo` 的形状逐字一致。"""
@@ -81,6 +93,25 @@ GEOCODE_PAYLOAD: dict[str, Any] = {
     },
 }
 
+SUGGEST_PAYLOAD: dict[str, Any] = {
+    "status": 0,
+    # 笔记 §2.4 只核验了**入参**，返回体字段名尚未与官方核对（§9.2-⑨ 那条待办）。
+    # 这里按 `_parse_suggest` 的防御式假设给三条，恰好覆盖它丢条目的三种理由：
+    # 完整可用 / 没有坐标（点了也落不了点）/ 境外（个人档不可用，且会连带拖垮 regeo 与 POI）。
+    "result": [
+        {
+            "name": "温特豪德花园",
+            "location": {"lng": 116.4074, "lat": 39.9042},
+            "district": "东城区",
+            "city": "北京市",
+            "province": "北京市",
+            "adcode": 110101,
+        },
+        {"name": "没有坐标的那条", "district": "朝阳区"},
+        {"name": "境外的一条", "location": {"lng": 139.7, "lat": 35.6}},
+    ],
+}
+
 
 class FakeTransport:
     """按路径分发 canned 报文，同时记下真实发出去的 query 参数。"""
@@ -108,12 +139,16 @@ def make_service(
     *,
     bodies: dict[str, dict[str, Any]] | None = None,
     cache_enabled: bool = False,
+    suggest_enabled: bool = False,
 ) -> tuple[GeoService, FakeTransport]:
     """真 `GeoService` + 真 `BaiduClient` + 假网线 + 独立临时缓存库。
 
     `cache_enabled=False` 是默认：绝大多数用例要看的正是「这一层没东西时回什么」。
     唯一打开它的那条用例（缓存去重）自己传 `tmp_path` 下的库，绝不碰仓库里那份
     运行期缓存——那里面可能是真实 AK 跑出来的报文。
+
+    `suggest_enabled=False` 同样是默认，而且它就是 FR-108 的**线上默认值**：联想与地点
+    检索共用 100 次/日，默认开着的那个实现才是异常态。
     """
     transport = FakeTransport(bodies or {})
     settings = Settings(
@@ -121,6 +156,7 @@ def make_service(
         baidu_browser_ak="",
         data_mode="auto",
         cache_enabled=cache_enabled,
+        suggest_enabled=suggest_enabled,
     )
     clock = FakeClock()
     client = BaiduClient(
@@ -405,3 +441,214 @@ def test_empty_address_is_a_400_naming_the_field(tmp_path: Path) -> None:
     assert response.status_code == 400
     assert response.json()["error"]["detail"]["field"] == "address"
     assert transport.calls == []
+
+
+# --------------------------------------------------------------------------------------
+# ⑥ FR-108 地址联想：默认关闭、三道门槛、候选形状
+# --------------------------------------------------------------------------------------
+
+
+def suggest(
+    http: TestClient,
+    keyword: str = "温特豪德",
+    region: str | None = "北京",
+    mode: str = "live",
+    **extra: Any,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"keyword": keyword, "data_mode": mode}
+    if region is not None:
+        params["region"] = region
+    params.update(extra)
+    return http.get("/api/suggest", params=params).json()
+
+
+def test_suggest_is_off_by_default_and_egresses_nothing(tmp_path: Path) -> None:
+    """PRD FR-108 的门槛原文是「**默认关闭**、可手动开启」，默认态必须是零出网加一句解释。
+
+    关闭走的是 `_resolve(live=None)`：不是「请求失败了」，而是**根本没发请求**，
+    所以 `transport.calls` 必须是空数组（比 200 更能证明没烧配额）。
+    而文案要能读——前端 `#suggest-list` 直接铺 `message`，用户得知道去哪开。
+    """
+    service, transport = make_service(
+        tmp_path, bodies={ENDPOINTS["suggest"]: SUGGEST_PAYLOAD}, suggest_enabled=False
+    )
+    body = suggest(serve(service))
+
+    assert body["ok"] is False
+    assert body["empty"] is True
+    assert body["degraded_reason"] == "suggest_disabled"
+    assert MSG_SUGGEST_OFF in body["message"]
+    assert MSG_SAMPLE_UNAVAILABLE in body["message"], "合成层没有联想样本，这句话也得照实说"
+    assert not body.get("items"), f"关闭态不该有候选，实际 {body.get('items')}"
+    assert transport.calls == []
+
+
+def test_suggest_switch_reaches_the_service_from_dotenv(tmp_path: Path) -> None:
+    """🔴 这条是本轮改 `infra/config.py` 的原因：开关此前只能靠**真·环境变量**。
+
+    `suggest_enabled()` 的兜底读 `os.environ`，而 pydantic-settings 的 `env_file`
+    只把值填进模型字段、**不写回环境变量**。所以在字段落地之前，
+    `.env` 里写 `SUGGEST_ENABLED=true` 是静默无效的——用户照着 README 改了配置，
+    输入框却还是「未启用」，而且没有任何一处报错。
+    """
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("SUGGEST_ENABLED=true\n", encoding="utf-8")
+
+    assert Settings().suggest_enabled is False, "默认必须关闭：它与地点检索共用 100 次/日"
+    assert suggest_enabled(Settings(_env_file=str(dotenv))) is True
+    assert suggest_enabled(Settings(suggest_enabled=True)) is True
+
+
+def test_enabled_suggest_keeps_only_candidates_the_map_can_use(tmp_path: Path) -> None:
+    """候选列表里每一项都必须能直接落点：没坐标的、境外的一律丢掉，而不是留给前端。
+
+    丢境外那条尤其重要：个人档对境外配额为「-」，落到境外后 `regeo` / POI 全部白烧，
+    而面板上只表现为「地址行说取不到」——FR-103 那条链会跟着一起假失败。
+    """
+    service, transport = make_service(
+        tmp_path, bodies={ENDPOINTS["suggest"]: SUGGEST_PAYLOAD}, suggest_enabled=True
+    )
+    body = suggest(serve(service))
+
+    assert body["ok"] is True
+    assert body["data_source"] == "live"
+    assert body["total"] == 1 and body["dropped"] == 2
+    item = body["items"][0]
+    assert item["name"] == "温特豪德花园"
+    assert item["lnglat"] == [116.4074, 39.9042], "[经度, 纬度]，与 /api/regeo 同一约定"
+    assert item["district"] == "东城区" and item["adcode"] == "110101"
+    assert "没有坐标的那条" not in json.dumps(body, ensure_ascii=False)
+    assert "境外的一条" not in json.dumps(body, ensure_ascii=False)
+
+    outbound = transport.params_for(ENDPOINTS["suggest"])
+    assert outbound["query"] == "温特豪德" and outbound["region"] == "北京"
+    assert outbound["output"] == "json"
+    # 笔记 §2.4 没记载 suggestion 有坐标系入参，未列出的参数不许假设存在（§2 开头那条纪律）。
+    assert "coordtype" not in outbound and "coord_type" not in outbound
+
+
+def test_enabled_suggest_is_counted_as_a_place_call(tmp_path: Path) -> None:
+    """联想吃的是**地点检索**那 100 次/日（FAQ 2540 / 2549），所以 `place_calls` 必须 +1。
+
+    这条是 FR-108 全部门槛存在的理由：如果它记在别的栏里，§6.1 的出网预算断言就会
+    系统性低估真实消耗，而「一次体检即打满当日上限」的风险（R1′）没人看得见。
+    """
+    service, _ = make_service(
+        tmp_path, bodies={ENDPOINTS["suggest"]: SUGGEST_PAYLOAD}, suggest_enabled=True
+    )
+    body = suggest(serve(service))
+
+    assert body["usage"]["place_calls"] == 1
+    assert body["usage"]["http_requests"] == 1
+
+
+def test_city_limit_is_forwarded_only_when_the_caller_asked(tmp_path: Path) -> None:
+    """`city_limit` 不传就不该出现在 query 里：它进缓存键，多一个键就多一份缓存分叉。"""
+    service, transport = make_service(
+        tmp_path, bodies={ENDPOINTS["suggest"]: SUGGEST_PAYLOAD}, suggest_enabled=True
+    )
+    http = serve(service)
+    suggest(http)
+    suggest(http, keyword="温特豪德花园", city_limit="true")
+
+    plain, limited = transport.calls
+    assert "city_limit" not in plain[1]
+    assert limited[1]["city_limit"] == "true"
+    assert len(transport.calls) == 2, "不同关键字就该问两次，这里没有去重可言"
+
+
+@pytest.mark.parametrize("keyword", ["温", "温特"])
+def test_short_keyword_is_a_400_naming_the_field(tmp_path: Path, keyword: str) -> None:
+    """≥3 字这道门槛在**出网之前**：两个字的检索几乎必然召回一大片，白烧一次配额。
+
+    前端 `#addr` 的输入框也挡一次（`web/isochrone.js` 的防抖里），但挡在本地不等于
+    接口可以被绕过——这条钉的是后端那一半。
+    """
+    service, transport = make_service(
+        tmp_path, bodies={ENDPOINTS["suggest"]: SUGGEST_PAYLOAD}, suggest_enabled=True
+    )
+    response = serve(service).get("/api/suggest", params={"keyword": keyword, "region": "北京"})
+
+    assert response.status_code == 400
+    detail = response.json()["error"]["detail"]
+    assert detail["field"] == "keyword" and detail["min_len"] == 3
+    assert transport.calls == []
+
+
+def test_missing_region_is_a_400_naming_the_field(tmp_path: Path) -> None:
+    """官方把 `region` 列为必选，少了它线上回 `status=2`；本地先挡，别把 2 号错误传给用户。"""
+    service, transport = make_service(
+        tmp_path, bodies={ENDPOINTS["suggest"]: SUGGEST_PAYLOAD}, suggest_enabled=True
+    )
+    response = serve(service).get(
+        "/api/suggest", params={"keyword": "温特豪德", "data_mode": "live"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["detail"]["field"] == "region"
+    assert transport.calls == []
+
+
+def test_empty_suggestion_list_is_readable_not_an_error(tmp_path: Path) -> None:
+    """`status=0` 但 `result` 为空是官方的正常回答，得留成「再输入几个字试试」而不是降级。
+
+    和 FR-103 的 empty results 同一个取舍：`data_source` 仍是 `live`（这一层确实问过了），
+    `degraded_reason` 是 `empty_results`，而不是偷偷退回合成层造几个候选。
+    """
+    service, transport = make_service(
+        tmp_path,
+        bodies={ENDPOINTS["suggest"]: {"status": 0, "result": []}},
+        suggest_enabled=True,
+    )
+    body = suggest(serve(service))
+
+    assert body["data_source"] == "live"
+    assert body["empty"] is True
+    assert body["degraded_reason"] == "empty_results"
+    assert MSG_EMPTY_SUGGEST in body["message"]
+    assert body["items"] == [] and body["total"] == 0
+    assert len(transport.calls) == 1
+
+
+def test_second_identical_suggest_is_served_from_cache(tmp_path: Path) -> None:
+    """同一个词第二次问必须 0 出网、0 place 调用——这是「防抖 + 缓存」这道门槛的兑现处。"""
+    service, transport = make_service(
+        tmp_path,
+        bodies={ENDPOINTS["suggest"]: SUGGEST_PAYLOAD},
+        cache_enabled=True,
+        suggest_enabled=True,
+    )
+    http = serve(service)
+    first = suggest(http)
+    second = suggest(http)
+
+    assert first["data_source"] == "live" and len(transport.calls) == 1
+    assert second["data_source"] == "cache"
+    assert second["usage"]["http_requests"] == 0
+    assert second["usage"]["place_calls"] == 0, "命中缓存不能再记一次检索"
+    assert second["items"] == first["items"]
+    assert len(transport.calls) == 1, f"出网 {len(transport.calls)} 次，缓存去重没成立"
+
+
+def test_switching_the_flag_off_keeps_the_cache_readable(tmp_path: Path) -> None:
+    """「关闭」只关**出网**那一环：缓存读不花配额，所以开过一次后的历史候选照样还在。
+
+    这是 `services/geo.suggest()` 里那句注释的行为化断言。反过来说，如果关掉连缓存都不读，
+    用户关掉开关后输入框会突然变得「什么都想不出来」，那比留着历史更容易被当成坏了。
+    """
+    service, transport = make_service(
+        tmp_path,
+        bodies={ENDPOINTS["suggest"]: SUGGEST_PAYLOAD},
+        cache_enabled=True,
+        suggest_enabled=True,
+    )
+    http = serve(service)
+    assert suggest(http)["data_source"] == "live"
+
+    service.settings = service.settings.model_copy(update={"suggest_enabled": False})
+    body = suggest(http)
+
+    assert body["data_source"] == "cache"
+    assert body["degraded_reason"] != "suggest_disabled", "关掉开关不该把已有的历史候选也抹掉"
+    assert body["usage"]["place_calls"] == 0
+    assert len(transport.calls) == 1, "读缓存不是出网，第二次调用绝不能碰网线"

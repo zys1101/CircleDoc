@@ -5,7 +5,7 @@
 | 文档定位 | PRD §9 交付物「对比测试报告」；对应 FR-405、FR-406、§6.1、§6.2 |
 | 最后更新 | 2026-10-11 |
 | 测试命令 | `pytest -q`（零配置、零 AK、零真实出网） |
-| 结论 | **481 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
+| 结论 | **498 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
 
 ---
 
@@ -14,7 +14,7 @@
 **2026-10-10 起本项目已接入真实百度 AK**（服务端 + 浏览器端两类，配在 gitignored 的 `.env` 里）。
 所以这份报告现在有两类证据，**口径不同、不互相顶替**：
 
-* **`mock` 侧**：481 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
+* **`mock` 侧**：498 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
   也是本文 §1、§2、§3、§5 的主口径。
 * **`live` 侧**：§4.3 是一次**真实出网**的端到端实跑（三样例各一次），§6 的「JSAPI 实底图顶点点击」
   是另一次真实浏览器 + 真实出网的补验。§2.6 ~ §2.9 四个缺陷**只有在 live 下才暴露**——
@@ -44,16 +44,16 @@
 | `test_blind_spots.py` | 32 | 网格生成、haversine 判定、flood fill、轮廓追踪、两级阈值 | FR-220 ~ FR-224 |
 | `test_score.py` | 31 | 加权、95 % 权重缺口裁决、等级线、盲区惩罚、摘要生成 | FR-301、FR-302、FR-304 |
 | `test_isochrone_api.py` | 26 | `/api/isochrone` 全形状、降级、polyline 12 次硬上限 | FR-201、FR-203、FR-403 |
-| `test_geo_api.py` | 16 | **`/api/regeo` 与 `/api/geocode` 的接口级用例（本轮新增，此前一条都没有）**：§4.7 出参**平铺在顶层**、字段只来自 `addressComponent`（用一份「文本里像有区、组件里没给」的报文反证不切文本）、`location` 纬度在前而响应 `lnglat` 经度在前、同坐标第二次**命中缓存且 0 次出网**、空 results 留在 `live` 层不退合成、mock 态无 `formatted_address` 键、四类非法 `lnglat` 与境外坐标 400 且指名字段、信封带 `request_id` 且不泄 AK | FR-103、FR-101、§4.7、R8、FR-403 |
+| `test_geo_api.py` | 27 | **`/api/regeo` 与 `/api/geocode` 的接口级用例（上一轮新增，此前一条都没有）**：§4.7 出参**平铺在顶层**、字段只来自 `addressComponent`（用一份「文本里像有区、组件里没给」的报文反证不切文本）、`location` 纬度在前而响应 `lnglat` 经度在前、同坐标第二次**命中缓存且 0 次出网**、空 results 留在 `live` 层不退合成、mock 态无 `formatted_address` 键、四类非法 `lnglat` 与境外坐标 400 且指名字段、信封带 `request_id` 且不泄 AK。<br>**本轮 +11 例 `/api/suggest`（FR-108）**：默认关闭时 `degraded_reason = suggest_disabled` 且 `transport.calls == []`（**根本没发请求**，比 200 更能证明没烧配额）、`.env` 里的 `SUGGEST_ENABLED=true` 真能到达服务（§2.13）、候选只留「有坐标且在国内」的两条并计数 `total/dropped`、按 **place 桶**计量、缺 `region` 与 < 3 字各自 400 且指名字段、空列表是**结论**而不是错误、同词第二次走缓存 0 出网、**关掉开关后已有缓存仍可读** | FR-103、FR-108、FR-101、§4.7、R1′、R8、FR-403 |
 | `test_analysis_api.py` | 46 | `/api/analysis` 报告形状、任务轮询、后台模式、`/api/poi` 七维度、错误信封、**真实检索盲区偏大提示（`live` 与 `cache` 两态各断言一次 + `sample` 反向断言）**、**FR-104 类别子集：伤及盲区主判定的 7 种勾选组合逐一断言 + 总分分母随子集收缩** | §4.7、FR-205、FR-404、§4.4、§2.9、FR-104 |
-| `test_web_smoke.py` | 45 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线、**FR-106 抽屉的把手条 ↔ 面板对账 / 断点唯一真值 / 无 JS 降级 / 44 px 规则 / 地图高度口径**、**FR-107 档位来源（`?profile=` 优先于视口探测）与简化模式徽标取自响应 `meta`**、**FR-103 地址行的接线（`setCenter` 里必须真的调用、且不 `await`）/ 三条配额守卫齐全 / 地址字段无 `split` 无 `toFixed` / 四个状态都用 `data-state`** | R11、R12、R13、FR-213、FR-104、FR-106、FR-107、FR-103 |
+| `test_web_smoke.py` | 51 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线、**FR-106 抽屉的把手条 ↔ 面板对账 / 断点唯一真值 / 无 JS 降级 / 44 px 规则 / 地图高度口径**、**FR-107 档位来源（`?profile=` 优先于视口探测）与简化模式徽标取自响应 `meta`**、**FR-103 地址行的接线（`setCenter` 里必须真的调用、且不 `await`）/ 三条配额守卫齐全 / 地址字段无 `split` 无 `toFixed` / 四个状态都用 `data-state`**。<br>**本轮 +6 例 FR-108**：开关在 HTML 里**没有** `checked` 且关着时走 `closeSuggest()` 而不是 `fetch(`、前后端 `SUGGEST_MIN_KEYWORD_LEN` 逐字相等且按码点数、缓存键带城市 + 在飞去重 + 世代号三条守卫齐全、候选只渲染 `body.items` 且每行都能落点（`flyTo` 缺方法时退回 `panTo`）、键盘四键不吞掉手工地理编码、七个态的样式与 `aria-expanded` 同源且候选行 44 px | R11、R12、R13、FR-213、FR-104、FR-106、FR-107、FR-103、FR-108 |
 | `test_samples_baseline.py` | 16 | 三样例一致性、三型差异方向、基线不漂 | FR-102、FR-412、§6.1 |
 | `test_coord_param_table.py` | 13 | 接口 × 坐标参数名 × 坐标顺序常量表 | FR-406、R8 |
 | `test_health_contract.py` | 11 | `/api/health` 三个「数据模式」字段的位置与值域、零配置横幅、AK 不外泄 | §4.6、FR-404、FR-410 |
 | `test_cache_store_singleton.py` | 4 | 缓存单例口径唯一 | FR-402 |
-| **合计** | **481** | | |
+| **合计** | **498** | | |
 
-耗时：**4.34 ~ 4.82 s**（同一轮 481 例，本机连续五次实测，2026-10-11；`chrome-devtools` 与 node MCP 全程在线）。
+耗时：**4.83 ~ 5.10 s**（同一轮 498 例，本机连续五次实测，2026-10-11；`chrome-devtools` 与 node MCP 全程在线）。
 上一轮记录的 8.94 / 11.55 s **不是代码回归**而是后台负载：那次 `chrome-devtools` 浏览器与它的 node MCP 服务都在跑，
 纯 CPU 基准 `sum(range(10**7))` 同时段实测 0.644 s（正常量级的两倍），最慢单例
 `test_task_registry_is_bounded` 也从 0.68 s 涨到 1.9 ~ 2.3 s。本轮五次测量时浏览器 MCP
@@ -86,7 +86,7 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 
 ---
 
-## 2. 开发过程中发现并修复的十二个真实缺陷
+## 2. 开发过程中发现并修复的十四个真实缺陷
 
 十二份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
 「把 CI 脚本真的执行一遍」「在最小 DOM 打桩下真跑一遍绘制路径」
@@ -468,6 +468,48 @@ if (moved < 6) { openSheet(startExpanded ? "" : key); return; }
   更反直觉的是**在同一个 `evaluate_script` 里 `await 400 ms` 也不会落定**——这个 headless 通道的
   过渡帧只在 CDP 往返之间推进，所以落定态必须**分两次调用**读。本文 §6 表里那两组展开态数字都是这么量的。
 
+### 2.13 🔴 `.env` 里写 `SUGGEST_ENABLED=true` 曾经**静默无效**：pydantic-settings 不写回环境变量
+
+FR-108 的后端开关最初只有一处读取——`services/geo.suggest_enabled()` 在没有 `Settings` 实例时
+兜底 `os.environ.get("SUGGEST_ENABLED")`。看上去「`.env` 里改一行就能开」，实际改了也白改：
+**pydantic-settings 的 `env_file` 只把值填进模型字段，不会写回 `os.environ`**。
+于是 `.env` 里那行从来没有到达过任何一处判断，用户照着文档改完配置，输入框依旧回「未启用」，
+而**没有任何一处报错**。这类「配置项存在但没人读」的键一旦进了 `.env.example`，
+文档与行为之间的距离就只能靠人肉发现。
+
+修法不是补一句「请用 shell 环境变量」的说明，而是把开关做成 `infra/config.py` 里的真字段
+（`suggest_enabled: bool = False`），让 `.env` 有唯一生效路径；`suggest_enabled(settings)`
+退化成「有实例读实例、没实例读环境变量」。回归用例是
+`tests/test_geo_api.py::test_suggest_switch_reaches_the_service_from_dotenv`：它往 `tmp_path`
+写一份 `.env`，断言 `Settings(_env_file=...).suggest_enabled is True`，
+同时断言 `Settings().suggest_enabled is False`——「默认关闭」这条不能被 `.env` 机制顶掉。
+
+**判据**：凡是靠 `os.environ` 读的配置键，都必须有一个同名的 `Settings` 字段兜着，
+否则 `.env.example` 里那一行是假的。
+
+### 2.14 候选列表在移动端抽屉里「打字有反应、候选看不见」：文档流弹层必须自己滚进视口
+
+FR-108 的 `#suggest-list` 是**文档流里**的一块 `<ul>`，不是 `position: absolute` 的浮层。
+375×667 实测（`?profile` 不设、`data-sheet-mode="mobile"`、展开「参数」抽屉）：
+`#controls` 自己是滚动容器（`clientHeight 440` / `scrollHeight 2653`），
+`#addr` 落在 `top 568`（贴着抽屉底沿），紧跟其后的候选列表落在 **`top 742 / bottom 897`——整块在 667 视口之外**。
+表现是「字已经打进去了、下面什么也没冒出来」，而代码、样式、断言全是对的。
+
+修在状态的唯一写入口 `setSuggestState()`：进入任何可见态都补一句最小滚动。
+
+```js
+if (value !== "none") el.suggestList.scrollIntoView({ block: "nearest" });
+```
+
+复测同一台设备：`#controls.scrollTop` 由 `0` → `282`，列表 `top 460 / bottom 615` 完整落在视口内，
+三行候选高度 `44 / 66 / 44`（`min-height: 44px` 生效），`documentElement.scrollWidth` 仍是 `375`（没撑出横向滚动）。
+桌面侧同一句是**空操作**：先把输入框滚进视口再打字，`window.scrollY` 前后都是 `386`（`jump 0`），
+列表 `top 535 / bottom 714` 本来就在视口内——`block: "nearest"` 的语义就是「只在真看不见时才动」。
+
+这条与 §2.12 的「地图高度扣错」是同一类错误：**改了 DOM 结构没读几何**。
+`static` 定位的下拉列表落在哪个滚动容器里，决定它到底可不可见；
+`tests/test_web_smoke.py` 里那句 `scrollIntoView({ block: "nearest" })` 断言就是钉住这一点的。
+
 ---
 
 ## 3. 对比实验：串行 `direction` vs 批量算路（FR-405）
@@ -766,7 +808,8 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 | `docker compose up` | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → `/api/health` + `/api/samples` + `POST /api/analysis` 可服务）。**仍未验**：compose 的起停、以及 CI 没挂 `-v` 所以「Linux 宿主 UID 1000 对 `./data` 的写权限」这条在开发机上复现不出来 |
 | ~~🔴 **FR-106 底部抽屉：功能未实现**~~ | ✅ **2026-10-11 已实现并补验**，抽屉自身的两处缺陷见 §2.12，逐条测量见 `docs/shots/README-isochrone-acceptance.md` 的「FR-106 移动端底部抽屉」一节 | 这条 10-11 才登记为「未实现」，同日落地。PRD §6.3 的「两档视口 375×667 / 414×896 无横向滚动、无元素重叠」现在**有可复现的测量记录了**（`scrollWidth / clientWidth` 两档都是 375/375 与 414/414，逐元素热区 ≥ 44 px）。**仍未验**的是真机手感那三项（下一行）——抽屉能拖不等于手指好拖 |
 | ~~**FR-107 只能按视口宽度自动降档，无法手动指定**~~ | ✅ **2026-10-11 已补**：`?profile=m` / `?profile=d` 覆盖 `matchMedia` 探测，报告头徽标按**响应** `meta.lightweight` / `meta.k` 写 | 四例真实浏览器实测 + 三次 curl 直连后端，逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-107 档位显式化」一节。**顺带照出一个口径事实**：两档分数**既可能相同也可能不同**——天坛中心点 `k=6` 与 `k=12` 都是 44.65（D），交道口样例则是 `mobile` 63.03（C，`reqid f27f8945bff7452c`）vs `desktop` 67.8（C，`reqid bd00c4063e6a43e8`），差 4.77 分。所以「轻量档只是省调用、不影响结论」这句**不成立**，徽标里那句「别把两档的分数横向比较」是必需的而不是客套 |
-| **FR-103 地址行的真实 `live` 一跳** | 零出网下**四例已验**（真实服务端 mock 空态 + 前端缓存去重 + 世代号挡过期响应 + 断网失败态），但**成功态是打桩验的**：把 `window.fetch` 换成返回真实响应形状的桩后量 `data-state="ok"`、五枚字段徽标与 375 宽下的换行 | 后端 `live` 分支不靠这条打桩：`tests/test_geo_api.py` 用**真实 `BaiduClient` + `httpx.MockTransport`** 跑完整解析链（16 例，含「组件里没给区就不许从文本切出区」的反证）。真实 `live` 的一跳要烧 300 次/日逆地理配额里的 1 次，**按配额纪律等用户点头才跑**；逐条证据与 `request_id` 见 `docs/shots/README-isochrone-acceptance.md` 的「FR-103 中心点地址回显」一节 |
+| **FR-103 地址行的真实 `live` 一跳** | 零出网下**四例已验**（真实服务端 mock 空态 + 前端缓存去重 + 世代号挡过期响应 + 断网失败态），但**成功态是打桩验的**：把 `window.fetch` 换成返回真实响应形状的桩后量 `data-state="ok"`、五枚字段徽标与 375 宽下的换行 | 后端 `live` 分支不靠这条打桩：`tests/test_geo_api.py` 用**真实 `BaiduClient` + `httpx.MockTransport`** 跑完整解析链（该文件 27 例里 regeo / geocode 占 16 例，含「组件里没给区就不许从文本切出区」的反证）。真实 `live` 的一跳要烧 300 次/日逆地理配额里的 1 次，**按配额纪律等用户点头才跑**；逐条证据与 `request_id` 见 `docs/shots/README-isochrone-acceptance.md` 的「FR-103 中心点地址回显」一节 |
+| 🔴 **FR-108 候选列表的真实 `live` 一跳 + `/place/v2/suggestion` 报文形状** | 零出网下**七例已验**（默认关闭零请求 / 两个本地门槛零请求 / 真实一跳打到本地 `mock` 后端 / 打桩后渲染与点选与键盘 / 前端缓存命中不再发 / 换城市重问 / 世代号丢慢响应 / 移动端抽屉滚动进视口），但**候选列表本身是 `window.fetch` 打桩量的** | 三件没验：① 真实 `live` 一跳要烧「地点输入提示与检索**共用** 100 次/日」池子里的 1 次，等用户点头；② `flyTo` 在无浏览器 AK 的机器上跑不了，只留 `panTo` 退路 + `typeof` 守卫（`tests/test_web_smoke.py` 断言这条退路在）；③ **`_parse_suggest` 的字段名是按 `docs/BAIDU_API_NOTES.md` §2.4 写的，而那一节本身没记返回体形状**——单测用的是自造桩件，真字段名（`name` / `location` / `city` / `district` / `adcode` / `province`）必须等 live 那一跳逐字段核对，核对不上就是「列表永远空」这种安静失败。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「FR-108 地址联想」一节 |
 | 移动端**真机**行为 | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
 | 浏览器内真实渲染 | 本环境的无头 Chrome 无输出（被沙箱挡住） | 改用 Node + 最小 DOM 打桩真跑 `web/report.js` 与 `web/isochrone.js` 的**绘制路径**（`tools/report_dom_smoke.mjs` **15 项** + `tools/map_layers_smoke.mjs` **12 项**，`grep -c 'OK '` 实测；此前本文写 17、README/DESIGN 写 12，三处都对不上脚本真实输出，已统一），但它**不是**真实浏览器 |
 | 前端截图（**能拍、但不入库**） | 2026-10-10 起 chrome-devtools 通道能截图（实时底图与橙色真实路网线已现场目视确认） | **仍不提供 PNG**：截图必然含百度瓦片与版权条，把第三方地图影像固化进开源仓库是另一回事；本文件继续以 DOM 计数、network、状态行/tooltip 原文作证据 |
@@ -814,21 +857,22 @@ CI 本来就没有 `.env`，这条改动对它无感；2026-10-10 复跑 `m1` 35
 
 本文与 README / DESIGN 引用的**断言条数**都是手写的，而这三处早就和脚本真实输出对不上了。
 复现命令与实测值（**2026-10-11 再次全部重跑**，右两列分别是本轮值与上一轮登记的旧值。
-这张表已经连着三轮抓到东西：第一轮三处漂移、FR-106 那轮四处、FR-107 那轮 `report.js` 与
-`test_web_smoke.py` 各 +1；本轮 FR-103 又动了前端，`isochrone.js` 与 `test_web_smoke.py`
-两行随之各 +1，另新增一行 `test_geo_api.py` —— 这些都是**真实增长**不是漂移，
+这张表已经连着四轮抓到东西：第一轮三处漂移、FR-106 那轮四处、FR-107 那轮 `report.js` 与
+`test_web_smoke.py` 各 +1；FR-103 那轮动了前端，`isochrone.js` 与 `test_web_smoke.py`
+各 +1，另新增一行 `test_geo_api.py`；本轮 FR-108 又同时动了前端与接口层，
+`isochrone.js` +2、两个测试文件 +6 / +11 —— 这些都是**真实增长**不是漂移，
 但只有重跑命令才分得清）：
 
 | 数字 | 复核命令 | 实测 | 此前文档写的 |
 | --- | --- | --- | --- |
 | `report.js` 取的 DOM 节点数 | `grep -o 'getElementById("[^"]*"' web/report.js \| sed 's/.*("\(.*\)"/\1/' \| sort -u \| wc -l` | **26**（本轮未动） | 24 → 25 → **26**（FR-107 新增 `#profile-badge`，README §10.4 / 本文 §1.1 / DESIGN §10 / 两个脚本的注释都曾手写 24） |
-| `isochrone.js` 取的 DOM 节点数 | 同上换成 `web/isochrone.js` | **60** | 58 → 59（FR-106 新增 `#sheet-bar` 及其三个 tab）→ **60**（FR-103 新增 `#center-address`） |
+| `isochrone.js` 取的 DOM 节点数 | 同上换成 `web/isochrone.js` | **62** | 58 → 59（FR-106 新增 `#sheet-bar` 及其三个 tab）→ 60（FR-103 新增 `#center-address`）→ **62**（FR-108 新增 `#suggest-on` 开关与 `#suggest-list` 候选列表；`web/isochrone.html` 的 `id=` 去重后同步到 **96**） |
 | `report_dom_smoke.mjs` 断言条数 | `node tools/report_dom_smoke.mjs \| grep -c 'OK '` | **15**，`exit=0` | 本文写 17、README/DESIGN 写 12 |
-| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12**，`exit=0`（本轮用 `POST /api/analysis` 的 mock 响应重新生成桩输入后复跑，70 627 字节） | 上一轮也写 12 —— 但**那个 12 是抄的**，同一提交上这条脚本崩了、`grep -c` 实返 `0`，见 §2.11 |
-| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **45** | 27 → 18（README §10.4 曾写）→ FR-104 补到 31 → FR-106 补到 39 → FR-107 补到 41 → **FR-103 补到 45** |
-| `test_geo_api.py` 例数 | `pytest -q --collect-only tests/test_geo_api.py` | **16** | **本轮新增文件**：`/api/regeo` 与 `/api/geocode` 此前**没有任何接口级用例**，只在启动探测里被间接触碰 |
+| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12**，`exit=0`（本轮为 FR-108 改过 `isochrone.js` 后重新生成桩输入复跑，96 784 字节） | 上一轮也写 12 —— 但**那个 12 是抄的**，同一提交上这条脚本崩了、`grep -c` 实返 `0`，见 §2.11 |
+| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **51** | 27 → 18（README §10.4 曾写）→ FR-104 补到 31 → FR-106 补到 39 → FR-107 补到 41 → FR-103 补到 45 → **FR-108 补到 51** |
+| `test_geo_api.py` 例数 | `pytest -q --collect-only tests/test_geo_api.py` | **27** | 上一轮新增文件（16 例）→ **本轮 +11 例 `/api/suggest`**：`/api/suggest` 此前同样**没有任何接口级用例**，只在启动探测里被间接触碰 |
 | `test_health_contract.py` 例数 | 同上换成该文件 | **11** | 本文 §1 表写 10（一轮重算合计时暴露，已就地改成 11） |
-| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **481**（`exit=0`） | 451 → FR-106 后 459 → FR-107 补 2 例到 461 → **FR-103 补 20 例（16 + 4）到 481** |
+| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **498**（`exit=0`） | 451 → FR-106 后 459 → FR-107 补 2 例到 461 → FR-103 补 20 例（16 + 4）到 481 → **FR-108 补 17 例（11 + 6）到 498** |
 
 **本轮新增的纪律：复核命令要连着看退出码。** `grep -c 'OK '` 在崩溃的输出上照样返回一个数（`0`），
 只比对计数分不清「跑绿了」和「跑都没跑」——§2.11 那条假数字就是这么来的。

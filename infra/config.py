@@ -241,6 +241,13 @@ class Settings(BaseSettings):
     probed_data_mode: EffectiveDataMode | None = None
     """启动探测写入的运行模式；由 `Settings.apply_probe()` 设置，不由环境变量提供。"""
 
+    suggest_enabled: bool = False
+    """FR-108 地址联想总开关，**默认关闭**：地点输入提示与地点检索**共用 100 次/日**配额
+    （笔记 FAQ 2540 / 2549），开着它就等于让输入框替用户烧检索额度。
+    ⚠️ 这个字段是 `.env` 唯一生效路径：`services/geo.suggest_enabled()` 的兜底读的是
+    `os.environ`，而 pydantic-settings 的 `env_file` **只填字段、不写环境变量**——
+    没有它时，`.env` 里写 `SUGGEST_ENABLED=true` 会静默无效。"""
+
     # ----------------------------------------------------------------------------------
     # 令牌桶：按服务分桶（PRD §4.6）。稀缺度相差 50 倍的服务共用一个桶会互相挤占。
     # 数值是**保守建议值**，须经 `.env` 覆盖，并以账号控制台实际档位为准（笔记 §9.2-①）。

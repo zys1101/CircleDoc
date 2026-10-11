@@ -155,6 +155,60 @@ legend {
   color: var(--ink-strong);
 }
 
+/* FR-108 地址联想候选。和 FR-103 一样只用 `data-state` 表达状态、不用 `hidden`：
+   作者规则里的 `display` 权重高于 UA 样式表的 `[hidden] { display: none }`，
+   靠 `hidden` 藏不住行；反过来，除 `none` 之外的每个态都必须有可读文案，
+   包括「开关没开」和「关键字太短」——这两条是告诉用户为什么列表是空的。 */
+.suggest-list {
+  display: block;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.suggest-list[data-state="none"] {
+  display: none;
+}
+
+.suggest-item,
+.suggest-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink-strong);
+}
+
+.suggest-item {
+  cursor: pointer;
+}
+
+.suggest-item:last-child,
+.suggest-note:last-child {
+  border-bottom: 0;
+}
+
+.suggest-item[aria-selected="true"] {
+  background: var(--bg);
+}
+
+.suggest-part,
+.suggest-note {
+  color: var(--muted);
+}
+
+/* 失败与「门槛没达到」要分得开：前者是链路出了问题（橙，和 FR-103 的地址错误同色），
+   后者只是提示用户还缺一个字或一个城市（默认灰色就够）。 */
+.suggest-list[data-state="error"] .suggest-note {
+  color: var(--warn);
+}
+
 input[type="text"],
 select {
   width: 100%;
@@ -787,6 +841,14 @@ table.vertices td.sample.sample-blocked_timeout div:first-child {
   width: 22px;
   height: 22px;
   margin-top: 0;
+}
+
+/* FR-108 的候选行同样是热区：一行就是一个落点，按不准就等于这个功能在手机上不存在。
+   桌面端 12 px 的字在抽屉里也要放大一档，否则和上面那些 14 px 的行摆在一起显小。 */
+.page-map[data-sheet-mode="mobile"] .suggest-item {
+  align-items: center;
+  min-height: 44px;
+  font-size: 14px;
 }
 
 /* 可点的文字链接也是热区：`.back`（返回首页）与页脚三条链接本质是移动端的导航，

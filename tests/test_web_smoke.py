@@ -645,7 +645,7 @@ def test_center_address_is_wired_to_the_regeo_route() -> None:
     code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
     assert 'const REGEO_PATH = "/api/regeo";' in code
 
-    set_center = js_function(code, "function setCenter(lnglat, note_)", "\nfunction ")
+    set_center = js_function(code, "function setCenter(lnglat, note_, mapHop)", "\nfunction ")
     assert "fetchCenterAddress(value);" in set_center
     # 🔴 不 await：地址只是回显，再慢再失败都不许拖住等时圈、地图平移与 `renderAll()`。
     assert "await fetchCenterAddress" not in set_center
@@ -713,3 +713,150 @@ def test_center_address_is_readable_in_every_state() -> None:
     assert "display: none" not in base
     assert '.address-line[data-state="error"]' in css
     assert ".address-part" in css
+
+
+# --------------------------------------------------------------------------------------
+# FR-108 地址联想：默认关闭 + 三道门槛 + 候选只来自响应 + 选中即落点
+# --------------------------------------------------------------------------------------
+def test_suggest_is_off_by_default_and_gated_on_the_frontend() -> None:
+    """PRD FR-108 的门槛原文是「≥3 字 + 防抖 500 ms + 本地缓存 + **默认关闭、可手动开启**」。
+
+    这条盯的是「前端这一半」：后端 `SUGGEST_ENABLED` 默认 false 也拦不住一个不勾开关就
+    发请求的输入框——那照样会在 Network 里留下一串 400/200，而且把「未启用」的提示
+    当成 bug 报上来。所以断言分三段：HTML 里的 checkbox **没有** `checked`、
+    开关关着时走的是 `closeSuggest()` 而不是 `fetch(`、防抖与门槛常量都在。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    html = ISOCHRONE_HTML.read_text(encoding="utf-8")
+    assert 'const SUGGEST_PATH = "/api/suggest";' in code
+    assert "const SUGGEST_DEBOUNCE_MS = 500;" in code
+
+    assert 'id="suggest-on"' in html
+    off = "默认必须关闭：它与地点检索共用 100 次/日"
+    assert not re.search(r'id="suggest-on"[^>]*checked', html), off
+
+    on_input = js_function(code, "function onAddrInput()", "\nasync function ")
+    assert "if (!el.suggestOn.checked)" in on_input
+    assert "closeSuggest();" in on_input
+    assert "fetch(" not in on_input, "开关没勾就不该有任何请求，让后端拒绝不算数"
+    assert "setTimeout(fetchSuggestions, SUGGEST_DEBOUNCE_MS)" in on_input
+
+
+def test_suggest_min_length_matches_the_backend() -> None:
+    """两边的「≥3 字」必须逐字相等，而且要按**码点**数而不是 UTF-16 单元。
+
+    对账而不是各写一份：前端放了行、后端回 400 是最难复现的一种「界面没问题」。
+    `Array.from(...)` 那半边挡的是 emoji / 生僻字——Python `len()` 数码点，
+    `String.length` 数单元，同一个词两边能差出 1。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    backend = (ROOT_DIR / "services" / "geo.py").read_text(encoding="utf-8")
+    js_min = int(re.search(r"const SUGGEST_MIN_KEYWORD_LEN = (\d+);", code).group(1))
+    py_min = int(re.search(r"^SUGGEST_MIN_KEYWORD_LEN = (\d+)$", backend, re.MULTILINE).group(1))
+    assert js_min == py_min == 3, f"前端 {js_min} / 后端 {py_min}"
+
+    counter = js_function(code, "function codePointLength(value)", "\nfunction ")
+    assert "Array.from" in counter and ".length" in counter
+
+
+def test_suggest_keeps_the_same_three_guards_as_fr_103() -> None:
+    """缓存键带城市、同词在飞去重、过期响应按世代号丢弃——三条一起才敢让输入框发请求。
+
+    键为什么要带 `region`：换城市等于换答案，只按关键字缓存会把「北京·温特豪德」
+    的候选回放给改成「上海」的用户，而列表看着完全正常。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    assert 'suggest: { timer: 0, pending: "", seq: 0, cache: new Map()' in code
+    assert "items: [], active: -1 }," in code
+
+    fetch = js_function(code, "async function fetchSuggestions()", "\nfunction ")
+    assert "const key = `${region}|${word}`;" in fetch
+    assert "state.suggest.cache.get(key)" in fetch
+    assert "state.suggest.pending === key" in fetch
+    assert fetch.count("seq !== state.suggest.seq") == 2, "成功与失败两条路径都要判过期"
+    # 只有真问过百度的那两类才留下；把 mock / 未启用的提示缓存住，用户随后开了开关也看不见候选。
+    assert 'body.data_source === "live" || body.data_source === "cache"' in fetch
+
+
+def test_suggest_candidates_come_from_the_response_and_are_selectable() -> None:
+    """候选行只渲染 `body.items`，且每一项都必须能落点；选中走 flyTo、且不再回头问一次。
+
+    `pair(item.lnglat)` 那层过滤是对形状漂移的第二道防线（后端已经丢过没坐标和境外的条目）：
+    宁可显示「没有候选」，也不给一行点下去毫无反应的候选——那种「按了没动静」在移动端
+    会被当成页面卡死。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    render = js_function(code, "function renderSuggest(body)", "\nfunction ")
+    assert "Array.isArray(body.items)" in render
+    assert "pair(item && item.lnglat)" in render
+    assert ".split(" not in render and ".slice(" not in render, "候选文案被切成文本了"
+    option = code.split("function suggestOption")[1].split("function renderSuggest")[0]
+    assert "innerHTML" not in option, "候选文案只能走 textContent"
+
+    choose = js_function(code, "function chooseSuggestion(index)", "\nfunction ")
+    assert 'setCenter(item.lnglat, `联想选中「${item.name}」`, "fly");' in choose
+    # 回填输入框用的是赋值而不是 set value + dispatch，否则 input 事件会绕回来再问一次。
+    assert "el.addr.value = String(item.name);" in choose
+    assert "fetch(" not in choose
+
+    set_center = js_function(code, "function setCenter(lnglat, note_, mapHop)", "\nfunction ")
+    assert 'mapHop === "fly"' in set_center and ".flyTo(point)" in set_center
+    assert "typeof state.jsapi.map.flyTo ===" in set_center, "flyTo 未经实机验证，必须留 panTo 退路"
+    assert ".panTo(point)" in set_center
+
+
+def test_suggest_keyboard_paths_do_not_swallow_the_manual_search() -> None:
+    """Enter 有选中行时才归联想，否则必须照旧落回 `runGeocode()`（FR-101 方式②不能被吃掉）。
+
+    这是这条链上最容易写错的一格：加了联想就把 Enter 整个接管，用户按回车想做的是
+    「就拿这串字去地理编码」，结果页面只把高亮行填进输入框。
+    """
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    keydown = code.split('el.addr.addEventListener("keydown"', 1)[1].split("});", 1)[0]
+    for key in ("ArrowDown", "ArrowUp", "Escape", "Enter"):
+        assert f'event.key === "{key}"' in keydown, f"键盘少了 {key} 这条路"
+    assert "runGeocode();" in keydown
+    assert keydown.index("state.suggest.active >= 0") < keydown.index("runGeocode();")
+    assert "event.preventDefault();" in keydown, "选中行时不能顺手再把地理编码跑一遍"
+    assert "moveSuggestActive(1)" in keydown and "moveSuggestActive(-1)" in keydown
+
+
+def test_suggest_list_is_styled_and_announced_in_every_state() -> None:
+    """列表的七个态都要有可见样式，且 `aria-expanded` 与 `data-state` 由同一处维护。
+
+    和 FR-103 同一个坑：`display` 的作者规则权重高于 UA 的 `[hidden]`，所以状态一律走
+    `data-state`，只有 `none` 才真的收起。读屏那半边则要求 combobox 三件套齐全，
+    否则「有弹层」这件事根本播报不出去。
+    """
+    html = ISOCHRONE_HTML.read_text(encoding="utf-8")
+    assert 'class="suggest-list" id="suggest-list" role="listbox" data-state="none"' in html
+    assert 'role="combobox"' in html and 'aria-controls="suggest-list"' in html
+    assert html.index('id="addr"') < html.index('id="suggest-list"'), "候选列表要紧跟输入框"
+
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    setter = js_function(code, "function setSuggestState(value)", "\nfunction ")
+    assert "el.suggestList.dataset.state = value;" in setter
+    assert '"aria-expanded"' in setter
+    assert (
+        'el.suggestList.scrollIntoView({ block: "nearest" })' in setter
+    ), "候选列表在文档流里，移动端抽屉必须自己滚到看得见"
+    # 状态的写入口只有一处：把 `dataset.state` / `aria-expanded` 散落到各调用点，
+    # 迟早出现「读屏说有弹层、屏幕上什么都没有」。
+    assert code.count("el.suggestList.dataset.state") == 1
+    assert code.count('el.addr.setAttribute("aria-expanded"') == 1
+    assert "el.suggestList.hidden" not in code, "藏列表只能靠 data-state，hidden 会被作者规则压过去"
+
+    # 七个态：none / short / need_region / pending / empty / ok / error。
+    reason = js_function(code, "function suggestBlockReason(word, region)", "\nfunction ")
+    assert 'return "short";' in reason and 'return "need_region";' in reason
+    for state in ("pending", "error", "empty", "ok"):
+        assert f'"{state}"' in code, f"少了 {state} 这个态"
+
+    css = strip_css_comments(ISOCHRONE_CSS.read_text(encoding="utf-8"))
+    base = css.split(".suggest-list {")[1].split("}")[0]
+    assert "display: none" not in base, "整条列表默认收起只能靠 [data-state=none] 那条规则"
+    assert '.suggest-list[data-state="none"] {' in css
+    assert '.suggest-list[data-state="error"] .suggest-note' in css, "失败态要和大地址错误同色"
+    assert sheet_rule(".suggest-item") and "min-height: 44px" in sheet_rule(
+        ".suggest-item"
+    ), "候选行是触摸目标，移动端热区要 ≥ 44 px（PRD §6.3）"
