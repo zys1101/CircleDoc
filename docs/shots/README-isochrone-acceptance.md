@@ -848,6 +848,37 @@ README §9.7、`web/app.css` 注释和测试 docstring 三处，本轮重算是 
   `.fr113-health.json` / `.fr113-analysis.json` / `.fr113-headers.txt` / `.fr413-verify.log` /
   `_map_input.json` 全部删除；chrome-devtools 设备模拟回到 `1280x800x1`，两个百度官方页面标签已关闭 / 重置为 `about:blank`。
 
+### 7. 提交之后：推送通道与 CI 红灯（同日）
+
+- **推送**：`git push origin main`（`https://github.com/zys1101/CircleDoc.git`）走 HTTPS **不通**——
+  `github.com` 能解析（`nslookup` 回 `20.205.243.166`），但 443 直连一次 `Connection was reset`、
+  一次 `Failed to connect … port 443 after 21034 ms: Timed out`；同一时刻
+  `curl https://api.github.com/zen` 回 **200**，所以不是全站不通。本机代理 `127.0.0.1:7897`
+  **当时没在监听**（`netstat` 实测 `0`，只有无关的 `8888`）。
+  改走 GitHub 官方的 **SSH over 443**：`~/.ssh/github_ed25519` 对 `ssh.github.com:443` 认证返回
+  `Hi zys1101! You've successfully authenticated`，于是把 `~/.ssh/config` 的 `Host github.com`
+  覆写成 `HostName ssh.github.com` + `Port 443`，`git push ssh://git@github.com:443/…` 成功
+  （`5841857..a2d7d8a main -> main`，`exit=0`；随后 `git fetch` 同一 URL 把 `origin/main` 对齐，
+  `git rev-list --left-right --count origin/main...HEAD` = **0 0**）。
+  ⚠️ 这条改的是**仓库外的用户级 SSH 配置**，代理恢复后若想回到直连 HTTPS，把那两行删掉即可。
+- **CI 红**：run `38128925252` 三个 job 实测 `test` = success、`lint` = **failure**、
+  `build` = skipped。根因与逐条复现记录在 [`docs/TEST_REPORT.md`](../TEST_REPORT.md) §2.17——
+  一句话版：CI 那条「零公网外链」的 grep **不分标签**，把页脚按条款 7.3 加的两条
+  `<a href="https://lbsyun…">` 判成了公网资源，而测试那套同源哨子这一轮刚改成标签感知，
+  于是 CI 红在测试绿了的地方。
+- **修 CI 这一轮的本地证据**（不写没测过的数字）：
+  `yaml.safe_load('.github/workflows/ci.yml')` → lint job **7 个 step**，新 step 正文 **24 行**；
+  把新 step 的正文原样跑在仓库根 → `exit=0`；跑在注入了
+  `<script src="https://cdn.example.com/x.js">` 的临时副本 → `exit=1`（stderr 指到
+  `injected.html: <script> https://cdn.example.com/x.js`），临时副本随即删除。
+  `pytest -q` **501 passed**、`ruff check .` `exit=0`、`black --check .` **49 files unchanged** `exit=0`
+  （这一轮只动 `.github/workflows/ci.yml` 与三个 markdown，没碰 `.py`，black 无需重跑第二遍）。
+  顺带抓到 README §10.4 两个手写计数漂移（45 例 → 实测 **54**、60 个 id → 实测 **62**），已改，见 TEST_REPORT §7.1。
+- **本轮没有起任何本地服务**：`netstat -ano | grep -E ':88[0-9][0-9].*LISTENING'` 只剩
+  `127.0.0.1:8888`（pid 4708，上一会话遗留的无关进程，按「不杀不属于本轮的进程」留着）。
+- 🔴 **待回填**：修好后的那次 CI run 结论**还没读到**，本条不留占位数字——推送后按
+  `GET /repos/zys1101/CircleDoc/commits/<sha>/check-runs` 实测再写。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。

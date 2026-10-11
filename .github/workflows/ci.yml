@@ -67,15 +67,38 @@ jobs:
           echo "密钥扫描通过：未发现明文 AK"
 
       - name: 静态页零公网外链（R12 / R13）
-        # 与 tests/test_web_smoke.py 的断言同源，但这里只查最直接的一类：
-        # 静态 HTML 里出现 http(s) 资源引用就会在断网现场白屏。
+        # 🔴 只查**资源标签**（`script` / `link` / `img` / `iframe` …）的引用，不查 `<a href>`。
+        # 上一版用的是不分标签的 `grep '(src|href)="https?://'`，FR-413 页脚按条款 7.3 加的
+        # 两个官方外链（隐私政策、服务条款）是 `<a>`，被这条 grep 判成「公网资源」而把 CI 跑红
+        # （2026-10-11，test job 同批全绿）。`<a>` 是点击才走网络的文档链接，断网现场不会因为它白屏；
+        # 会白屏的是下载期就取资源的标签 —— 那才是 R12 的对象。
+        # 权威判定在 tests/test_web_smoke.py（标签感知 + 外链白名单 + rel 钉死），这里是不引用
+        # 测试代码的第二双眼睛。
         run: |
           set -euo pipefail
-          if grep -nE '(src|href)="(https?:)?//' web/*.html; then
-            echo "::error::静态页引用了公网资源（R12：Vue/ECharts/样式必须本地 vendored）"
-            exit 1
-          fi
-          echo "零公网外链检查通过"
+          python - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          ASSET = {"script", "link", "img", "iframe", "source", "video", "audio", "embed", "object"}
+          OPEN = re.compile(r"<(?P<tag>[a-zA-Z]+)\b(?P<attrs>[^>]*)>", re.I)
+          ATTR = re.compile(r"""\b(?:src|href|srcset)=["'](?P<ref>[^"']+)["']""")
+          EXTERNAL = re.compile(r"^(?:https?:)?//", re.I)
+
+          bad = []
+          for path in sorted(pathlib.Path("web").glob("*.html")):
+              for tag in OPEN.finditer(path.read_text(encoding="utf-8")):
+                  if tag["tag"].lower() not in ASSET:
+                      continue
+                  for attr in ATTR.finditer(tag["attrs"]):
+                      if EXTERNAL.match(attr["ref"].strip()):
+                          bad.append(f'{path.name}: <{tag["tag"]}> {attr["ref"]}')
+          if bad:
+              print("\n".join(bad), file=sys.stderr)
+              sys.exit("::error::静态页引用了公网资源（R12：Vue/ECharts/样式必须本地 vendored）")
+          print("零公网外链检查通过（资源标签口径，合规 <a> 外链不计入）")
+          PY
 
   test:
     name: test（pytest，零 AK）

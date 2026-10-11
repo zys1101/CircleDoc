@@ -780,9 +780,12 @@ ECharts 官方**只发整包**，没有「只含 radar + bar」的官方 thin bu
 实际占用仅为预算的 **47 %**（上表为 **2026-10-11** 按 `wc -c / 1024` 重测；FR-106 + FR-107 这两轮落地的增量是
 `isochrone.css` +7.6 KB、`isochrone.js` +7.5 KB、`report.js` +3.0 KB、`isochrone.html` +1.9 KB、`report.css` +0.6 KB，
 合计 +20.7 KB——移动端把手条样式与抽屉逻辑本来就只活在 `data-sheet-mode="mobile"` 那一支里，桌面一行都不多渲染），
-且**零 Vue、零 ECharts、零公网外链**（CI 有一条断言：静态 HTML 里出现 `http(s)://` 资源引用即失败）。
+且**零 Vue、零 ECharts、零公网资源外链**（CI 有一条断言：静态 HTML 的**资源标签**
+`script` / `link` / `img` / `iframe` 里出现 `http(s)://` 引用即失败；`<a href>` 是点击才走网络的
+文档链接，不在其列——页脚那两条官方隐私政策与服务条款链接就属于这一类。口径细化过程见
+[`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.17）。
 
-> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（45 例），它把 `web/report.js`（26 个）与 `web/isochrone.js`（60 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在，并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
+> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（54 例），它把 `web/report.js`（26 个）与 `web/isochrone.js`（62 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在，并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
 
 ### 10.5 🔴 前 K 实测用了分层选择，而非 §4.3 字面的全局最近 K
 

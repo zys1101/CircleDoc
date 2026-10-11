@@ -87,9 +87,9 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 
 ---
 
-## 2. 开发过程中发现并修复的十六个真实缺陷
+## 2. 开发过程中发现并修复的十七个真实缺陷
 
-十二份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
+这十七个都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
 「把 CI 脚本真的执行一遍」「在最小 DOM 打桩下真跑一遍绘制路径」
 「把移动端抽屉在 DevTools 里真拖一遍并量 `getBoundingClientRect`」
 「**配上真实 AK 跑一遍 live 全链路**」之后暴露的。
@@ -101,6 +101,8 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 §2.15 与 §2.10 / §2.11 是同一族：**501 例全绿、`ruff` / `black` 全绿、`node --check` 全绿，
 页脚上那串 `—` 照样是错的**。它踩的是「两条路径共用一个渲染函数，而两条路径的信封形状不一样」。
 §2.16 踩的还是老坑：**一个我自己在上一轮算错、并抄进三处文档的对比度数字**（写的 4.49，真值 4.51）。
+§2.17 是同族里新的一种：**本地三套门禁全绿，红在 CI**——同一份「零公网外链」规则有两套判定，
+测试那套这一轮刚改成标签感知，CI 那条自称「与测试同源」的 grep 没跟着改，于是它红在了测试绿的地方。
 
 ### 2.1 `services/poi_search.py`：7 处协程未 `await`（会导致接口 500）
 
@@ -591,6 +593,57 @@ AA 硬线 4.5」这套前提是对的。错的是算术：上一轮写进 README
 （`test_web_smoke.py` 一处 `'...'` 该写成 `"..."`），而上一轮文档里登记的是「black 全绿」——
 说明那次跑的不是最终文件状态。改成 double-quote 后 `17 files would be left unchanged`、`exit=0`。
 
+### 2.17 🔴 CI 的「零公网外链」哨子不分标签，把 FR-413 的合规外链判成公网资源（已修）
+
+**发现方式**：`a2d7d8a` 推上去之后 CI 红。这一条不在本地任何门禁的能力范围内——
+本地 `pytest` / `ruff` / `black` 全绿，红的是 GitHub Actions 里一条**与测试重复但不等价**的检查。
+
+**三个 job 的实测状态**（2026-10-11，`GET /repos/zys1101/CircleDoc/commits/a2d7d8aa…/check-runs`，
+未带 token 也可读；run id `38128925252`）：
+
+| job | `status` | `conclusion` |
+| --- | --- | --- |
+| `test（pytest，零 AK）` | completed | ✅ success |
+| `lint（ruff + black + 密钥扫描）` | completed | 🔴 **failure** |
+| `build（Docker 镜像 + 无 .db 断言）` | completed | skipped（`needs: [lint, test]` 被 lint 拦住） |
+
+🔴 **哪一步红的，不能从 CI 日志直接证明**：`GET /repos/…/actions/jobs/114439010462/logs`
+回 `403 Must have admin rights to Repository`（公开仓库的作业日志要鉴权）。所以判定靠
+**把 lint 的四个命令步逐条在本地复跑**，只有一条能复现红：
+
+| 复跑的命令步 | 结果 |
+| --- | --- |
+| `ruff check . --output-format=github` | `exit=0`（版本区间 `>=0.16,<0.17`，本地 0.16.10） |
+| `black --check --diff .` | `exit=0`（`>=26.5,<27`，本地 26.5.1） |
+| 密钥扫描那串 `grep … \| grep -vE '^\./(docs/\|README…)'` | `exit=1` = 没有命中 = 该步通过 |
+| `grep -nE '(src\|href)="(https?:)?//' web/*.html` | 🔴 `exit=0`，**命中 4 行** |
+
+命中的 4 行正是 FR-413 新加的两条官方外链，每个页面各一条：
+`web/index.html:76`、`web/index.html:77`、`web/isochrone.html:453`、`web/isochrone.html:454`
+（`https://lbsyun.baidu.com/index.php?title=openprivacy` 与 `…?title=open/law`）。
+
+**为什么这是检查写错，而不是页脚写错**：这条步骤守的是 R12——「Vue / ECharts / 样式必须本地
+vendored，否则断网现场白屏」，白屏的成因是**下载期就要取资源**。`<a href>` 是点击才导航的文档
+链接，断网首屏照样渲染得出来。而条款 7.3 明文要求页脚「附其隐私政策链接」——
+粗 grep 与合规要求本来就冲突，只是 FR-413 之前页脚没有任何外链，所以一直没暴露。
+
+🔴 **真正的教训是「同一个规则别有两套判定」**：这一轮已经把 `tests/test_web_smoke.py` 的外链哨子
+做成了标签感知（`ASSET_TAGS` + 反向白名单 + `rel` 钉死，54 例全绿），而 CI 里那条注释写着
+「与 `tests/test_web_smoke.py` 的断言同源」的 grep **没有跟着改**。多出来的这条更粗的门禁不是双保险，
+是第二个真相源：它会红在测试已经绿了的地方，而且只在 CI 红。
+
+**改法**：CI 步骤换成一段同样标签分类的内联 Python（**故意不 import 测试代码**，保留「第二双眼睛」的意义），
+只查 `script` / `link` / `img` / `iframe` / `source` / `video` / `audio` / `embed` / `object` 的
+`src` / `href` / `srcset`，并在注释里写清 `<a href>` 为什么不算。双向验证：
+
+| 验证 | 命令 | 结果 |
+| --- | --- | --- |
+| YAML 仍然合法 | `yaml.safe_load` 读 `.github/workflows/ci.yml` | lint job 7 个 step，新 step 正文 24 行 |
+| 现状不再误红 | 直接执行 CI 步骤正文（cwd = 仓库根） | `exit=0`，打印「零公网外链检查通过（资源标签口径…）」 |
+| 真公网资源仍被抓 | 同一段正文跑在 `web/` 临时副本，注入 `<script src="https://cdn.example.com/x.js">` | `exit=1`，stderr `injected.html: <script> https://cdn.example.com/x.js` |
+
+临时副本跑完即删。**没有放松检查**：正控制那一条就是防这个的。
+
 ---
 
 ## 3. 对比实验：串行 `direction` vs 批量算路（FR-405）
@@ -940,13 +993,16 @@ CI 本来就没有 `.env`，这条改动对它无感；2026-10-10 复跑 `m1` 35
 
 本文与 README / DESIGN 引用的**断言条数**都是手写的，而这三处早就和脚本真实输出对不上了。
 复现命令与实测值（**2026-10-11 再次全部重跑**，右两列分别是本轮值与上一轮登记的旧值。
-这张表已经连着四轮抓到东西：第一轮三处漂移、FR-106 那轮四处、FR-107 那轮 `report.js` 与
+这张表已经连着五轮抓到东西：第一轮三处漂移、FR-106 那轮四处、FR-107 那轮 `report.js` 与
 `test_web_smoke.py` 各 +1；FR-103 那轮动了前端，`isochrone.js` 与 `test_web_smoke.py`
 各 +1，另新增一行 `test_geo_api.py`；FR-108 那轮又同时动了前端与接口层，
 `isochrone.js` +2、两个测试文件 +6 / +11 —— 这些都是**真实增长**不是漂移，
 但只有重跑命令才分得清。**FR-413 这轮抓到的是另一种东西**：三个 DOM 计数一个没变（26 / 62 / 96），
 `test_web_smoke.py` +3，可是**上一轮写进文档的两个数字本身是错的**——页脚对比度 4.49（真值 4.51，
-见 §2.16）与「black 全绿」（本轮首跑 `black --check tests/` 是 `exit=1`）：
+见 §2.16）与「black 全绿」（本轮首跑 `black --check tests/` 是 `exit=1`）。
+**修 CI 那一轮（§2.17）又抓到一条同类漂移**：README §10.4 手写的 `test_web_smoke.py`（45 例）与
+`isochrone.js`（60 个 id）停在 FR-106 那轮，实测 `54 tests collected` 与 **62** 个唯一 id，
+两个数字在改 README 之前就已经错了两轮：
 
 | 数字 | 复核命令 | 实测 | 此前文档写的 |
 | --- | --- | --- | --- |
