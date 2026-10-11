@@ -114,6 +114,7 @@
     el.exportJson = document.getElementById("export-json");
     el.exportCsv = document.getElementById("export-csv");
     el.exportBlindCsv = document.getElementById("export-blind-csv");
+    el.exportPng = document.getElementById("export-png");
     el.exportHint = document.getElementById("export-hint");
   }
 
@@ -789,13 +790,13 @@
     el.exportJson.disabled = disabled;
     el.exportCsv.disabled = disabled;
     if (el.exportBlindCsv) el.exportBlindCsv.disabled = disabled;
+    if (el.exportPng) el.exportPng.disabled = disabled;
     el.exportHint.textContent = disabled
       ? "先跑一次体检，才有可导出的结果。"
-      : "导出内容仅限**当前这一次**分析；PNG 截图请自行保留地图右下角的版权与审图号标识。";
+      : "导出内容仅限**当前这一次**分析。PNG 是矢量报告卡，不截取地图底图，因此不触碰底图瓦片的版权与使用条款。";
   }
 
-  function download(filename, text, mime) {
-    const blob = new Blob([text], { type: mime });
+  function downloadBlob(filename, blob) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -805,6 +806,10 @@
     document.body.removeChild(anchor);
     // 立刻释放：报告可能被连续导出多次，不释放会攒下一串 blob。
     setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  function download(filename, text, mime) {
+    downloadBlob(filename, new Blob([text], { type: mime }));
   }
 
   function stem() {
@@ -943,6 +948,305 @@
     });
     // BOM：Excel 打开 UTF-8 CSV 不加 BOM 会把中文显示成乱码。
     download(`${stem()}-pois.csv`, `\ufeff${lines.join("\n")}\n`, "text/csv;charset=utf-8");
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // PNG 报告卡（FR-305 的「报告图片」那一半）
+  //
+  // 🔴 口径先说清楚：这张卡由**我方矢量内容**合成（评分卡 + 雷达图 + 柱状图 + 结论文字 +
+  // 合规文字带），**不含地图底图**。不是偷懒：JSAPI 把瓦片画进它自己的 `<canvas>`，图源是百度
+  // 域名且不带 CORS 响应头，画布按规范会被判定为 tainted、`toDataURL()` 抛 `SecurityError`。
+  // 所以条款 6.6 与 FR-305 那句「PNG 必须保留版权与审图号」在这里的满足方式是
+  // **导出品里以文字带保留标识**——条款要的是「保留标识」，不是「必须是那张在线瓦片图」。
+  // tainted 那一半在 `mock` / `cache` 下验不了（要一次真实底图加载 = JSAPI 浏览器端配额），
+  // 已按未实测登记在 README §10.7 与 DESIGN §6.4。
+  // -------------------------------------------------------------------------------------------
+  const PNG_W = 900; // 逻辑宽度；实际像素乘 PNG_SCALE
+  const PNG_SCALE = 2; // 2 倍：卡片在聊天工具里放大后仍需可读
+  const PNG_PAD = 28;
+  const PNG_INK = "#1f2430";
+  const PNG_BG = "#ffffff";
+  const PNG_FAINT = "#4b5563";
+  const PNG_WARN = "#9a6700";
+  const PNG_RULE = "#d8dee4";
+  const PNG_FONT = '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif';
+  // detached 的 SVG 光栅化时**外部样式表不生效**（`.radar-area` 那套配色全在 report.css 里），
+  // 所以只能把这几项呈现属性按**计算值**抄成内联。计算值同时解决了 `var(--line)` 与 `currentColor`。
+  const CHART_STYLE_PROPS = [
+    "fill",
+    "stroke",
+    "stroke-width",
+    "stroke-dasharray",
+    "stroke-linecap",
+    "opacity",
+    "font-size",
+    "font-weight",
+    "font-family",
+    "text-anchor",
+    "dominant-baseline",
+  ];
+
+  /**
+   * 页脚那两行合规文案是**唯一的真相源**：PNG 直接读它，不在 JS 里再抄一份字符串——
+   * 抄一份就是两处要维护，而这两处一旦分叉，导出品里的声明就先错了，页脚还是对的，
+   * 谁也看不见。读不到就**不出图**（`exportPng` 的失败分支会写进提示）：条款 6.6 说的是
+   * 标识「不得删除、掩藏」，静默省掉这两行比导出失败严重得多。
+   */
+  function complianceText(selector) {
+    const found = document.querySelector(selector);
+    const text = found ? String(found.textContent || "").replace(/\s+/g, " ").trim() : "";
+    if (!text) throw new Error(`报告卡缺合规文案：页脚 ${selector} 为空`);
+    return text;
+  }
+
+  /**
+   * 克隆页面上**已经画好**的那张 SVG，而不是在这里重算一遍坐标——
+   * 重算会让「屏幕上看到的」与「导出看到的」变成两套口径，那是本文件从头避免的事。
+   *
+   * ⚠️ 尺寸要在这里一次定准：浏览器按 SVG 的**固有像素**光栅化它，之后 `drawImage` 放大只会糊，
+   * 所以固有尺寸给的是「逻辑宽 × PNG_SCALE」，正好等于画布上的设备像素。
+   */
+  function cloneChart(host, drawWidth) {
+    const svg = host && host.querySelector("svg");
+    const box = svg && svg.viewBox && svg.viewBox.baseVal;
+    if (!box || !box.width || !box.height) return null;
+    const clone = svg.cloneNode(true);
+    const sources = [svg].concat(Array.prototype.slice.call(svg.querySelectorAll("*")));
+    const targets = [clone].concat(Array.prototype.slice.call(clone.querySelectorAll("*")));
+    sources.forEach((source, index) => {
+      const computed = getComputedStyle(source);
+      let css = "";
+      CHART_STYLE_PROPS.forEach((name) => {
+        css += `${name}:${computed.getPropertyValue(name)};`;
+      });
+      targets[index].setAttribute("style", css);
+    });
+    const drawHeight = (drawWidth * box.height) / box.width;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", String(Math.round(drawWidth * PNG_SCALE)));
+    clone.setAttribute("height", String(Math.round(drawHeight * PNG_SCALE)));
+    return { clone, width: drawWidth, height: drawHeight };
+  }
+
+  function svgToImage(pack) {
+    return new Promise((resolve, reject) => {
+      const text = new XMLSerializer().serializeToString(pack.clone);
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("图表 SVG 光栅化失败"));
+      // `encodeURIComponent` 而不是 `btoa`：雷达与柱状图里全是中文标签，btoa 遇非 Latin1 直接抛。
+      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`;
+    });
+  }
+
+  /** 两张图按页面口径的顺序竖排放：雷达 320 见方，柱状图吃满内宽（它本来就是宽图）。 */
+  function cardCharts() {
+    const specs = [
+      { host: el.radar, width: 320 },
+      { host: el.bar, width: PNG_W - PNG_PAD * 2 },
+    ];
+    return Promise.all(
+      specs.map((spec) => {
+        const pack = cloneChart(spec.host, spec.width);
+        if (!pack) return Promise.resolve(null);
+        // 某一张光栅化失败就少那一栏，卡片仍然出得来：文字部分才是结论的载体。
+        return svgToImage(pack).then(
+          (image) => ({ image, width: pack.width, height: pack.height }),
+          () => null
+        );
+      })
+    ).then((list) => list.filter((item) => !!item));
+  }
+
+  function pngFont(size, weight) {
+    return `${weight ? `${weight} ` : ""}${size}px ${PNG_FONT}`;
+  }
+
+  function wrapText(ctx, value, maxWidth) {
+    const out = [];
+    let line = "";
+    String(value === undefined || value === null ? "" : value).split("").forEach((ch) => {
+      const candidate = line + ch;
+      // 中文没有空格可分，所以按字累加测宽；换行点落在超宽的前一个字符上。
+      if (line && ctx.measureText(candidate).width > maxWidth) {
+        out.push(line);
+        line = ch === " " ? "" : ch;
+      } else {
+        line = candidate;
+      }
+    });
+    if (line) out.push(line);
+    return out;
+  }
+
+  /**
+   * 同一个 `paintCard` 跑两遍：第一遍 `dryRun` 只推进 y 用来算卡片总高，第二遍真画。
+   * 这样内容变长（结论五条、合规文字换行）永远不会把高度算错。
+   */
+  function paintCard(ctx, report, charts, dryRun) {
+    const inner = PNG_W - PNG_PAD * 2;
+    const meta = report.meta || {};
+    const score = report.score || {};
+    const blind = report.blind_spots || {};
+    const usage = report.usage || {};
+    let y = PNG_PAD;
+
+    function fill(line, size, weight, color) {
+      if (dryRun) return;
+      ctx.font = pngFont(size, weight);
+      ctx.fillStyle = color || PNG_INK;
+      ctx.fillText(line, PNG_PAD, Math.round(y + size));
+    }
+
+    function paragraph(value, opt) {
+      const size = (opt && opt.size) || 13;
+      const weight = opt && opt.weight;
+      const color = opt && opt.color;
+      const leading = (opt && opt.leading) || 1.5;
+      ctx.font = pngFont(size, weight);
+      wrapText(ctx, value, inner).forEach((line) => {
+        fill(line, size, weight, color);
+        y += size * leading;
+      });
+    }
+
+    function rule(gapBefore, gapAfter) {
+      y += gapBefore || 0;
+      if (!dryRun) {
+        ctx.strokeStyle = PNG_RULE;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(PNG_PAD, Math.round(y) + 0.5);
+        ctx.lineTo(PNG_W - PNG_PAD, Math.round(y) + 0.5);
+        ctx.stroke();
+      }
+      y += gapAfter || 0;
+    }
+
+    if (!dryRun) {
+      ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = PNG_BG;
+      ctx.fillRect(0, 0, PNG_W, ctx.canvas.height / PNG_SCALE);
+    }
+
+    paragraph("CircleDoc · 15 分钟生活圈智能体检报告", { size: 22, weight: "600" });
+    paragraph(
+      `出行方式 ${meta.mode || "—"} · 目标时长 ${num(meta.minutes, 0)} min · ` +
+        `中心点 ${num((meta.center || [])[0], 6)}, ${num((meta.center || [])[1], 6)}（${
+          meta.coordinate_system || "—"
+        }）`,
+      { size: 13, color: PNG_FAINT }
+    );
+    paragraph(
+      `数据来源 ${meta.data_source || "—"} · ${
+        meta.lightweight ? "轻量档" : "完整档"
+      }（${num(meta.k, 0)} 方向）· 生成于 ${meta.generated_at || "—"} · request_id ${
+        report.request_id || "—"
+      }`,
+      { size: 13, color: PNG_FAINT }
+    );
+    if (meta.degraded) {
+      paragraph(`本次为降级结果：${meta.degraded_reason || "原因见响应"}`, {
+        size: 13,
+        color: PNG_WARN,
+      });
+    }
+    rule(10, 16);
+
+    const scoreText = `${num(score.total, 2)} 分 · 等级 ${score.grade || "—"}`;
+    ctx.font = pngFont(30, "700");
+    fill(scoreText, 30, "700");
+    y += 30 * 1.3;
+    paragraph(
+      `六维加权 ${num(score.weight_sum, 2)} · 罚分 ${num(score.penalty, 1)} · ` +
+        `盲区 ${num(blind.count, 0)} 处，占圈内面积 ${num(blind.area_pct, 4)} %（${num(
+          blind.area_km2,
+          4
+        )} km²）`,
+      { size: 13, color: PNG_FAINT }
+    );
+    y += 12;
+
+    charts.forEach((chart) => {
+      if (!dryRun) ctx.drawImage(chart.image, PNG_PAD, Math.round(y), chart.width, chart.height);
+      y += chart.height + 14;
+    });
+
+    const summary = report.summary || [];
+    if (summary.length) {
+      paragraph("结论（由本次响应生成）", { size: 15, weight: "600" });
+      summary.forEach((line) => paragraph(`· ${line}`, { size: 13 }));
+    }
+
+    paragraph(
+      `本次调用：HTTP ${num(usage.http_requests, 0)} 次 · 路线配额 ${num(
+        usage.quota_units,
+        0
+      )} 单位 · 地点检索 ${num(usage.place_calls, 0)} 次 · 缓存命中 ${num(
+        usage.cache_hits,
+        0
+      )} 次 · 用时 ${num(usage.elapsed_ms, 0)} ms`,
+      { size: 13, color: PNG_FAINT }
+    );
+
+    rule(10, 12);
+    paragraph(complianceText(".foot-legal"), {
+      size: 12,
+      color: PNG_FAINT,
+      leading: 1.6,
+    });
+    paragraph(complianceText(".foot-review"), { size: 12, color: PNG_FAINT, leading: 1.6 });
+    paragraph("本图为矢量报告卡，不含地图底图瓦片；如需底图图像，请自行保留其版权与审图号标识。", {
+      size: 12,
+      color: PNG_FAINT,
+      leading: 1.6,
+    });
+    return y + PNG_PAD;
+  }
+
+  function buildPngBlob(report) {
+    return cardCharts().then((charts) => {
+      const probe = document.createElement("canvas").getContext("2d");
+      // 浏览器关了 canvas（隐私设置里真会关）时给一句人话，而不是一记 TypeError。
+      if (!probe) throw new Error("本机浏览器没有可用的 2D canvas，PNG 报告卡出不了");
+      const height = Math.ceil(paintCard(probe, report, charts, true));
+      const canvas = document.createElement("canvas");
+      canvas.width = PNG_W * PNG_SCALE;
+      canvas.height = height * PNG_SCALE;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(PNG_SCALE, PNG_SCALE);
+      paintCard(ctx, report, charts, false);
+      return new Promise((resolve, reject) => {
+        canvas.toBlob(
+          (blob) => (blob ? resolve(blob) : reject(new Error("canvas.toBlob 返回空"))),
+          "image/png"
+        );
+      });
+    });
+  }
+
+  function exportPng() {
+    if (!current) return Promise.resolve();
+    // 🔴 导出期间又来了一次分析也不能混用两份结果：先把引用定死在**当前这份**报告上。
+    const report = current;
+    el.exportPng.disabled = true;
+    el.exportHint.textContent = "正在合成 PNG 报告卡（矢量图表 + 合规文字带，不含地图底图）…";
+    return buildPngBlob(report).then(
+      (blob) => {
+        downloadBlob(`${stem()}-report.png`, blob);
+        // 先回门禁、后写结果：`syncExportState()` 会把提示刷回默认文案，反过来写就等于
+        // 成功与失败都看不见（浏览器实测踩过一次）。
+        syncExportState();
+        el.exportHint.textContent =
+          `已导出 PNG 报告卡（${PNG_W * PNG_SCALE} px 宽，约 ${Math.round(blob.size / 1024)} KB）。` +
+          "内容仅限本次分析，不得二次分发。";
+      },
+      (error) => {
+        syncExportState();
+        el.exportHint.textContent =
+          `PNG 导出失败：${(error && error.message) || error}。JSON / CSV 导出不受影响。`;
+      }
+    );
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1176,6 +1480,7 @@
     el.exportJson.addEventListener("click", exportJson);
     el.exportCsv.addEventListener("click", exportCsv);
     if (el.exportBlindCsv) el.exportBlindCsv.addEventListener("click", exportBlindCsv);
+    if (el.exportPng) el.exportPng.addEventListener("click", exportPng);
     // FR-213：表头点击排序。事件委托挂在 thead 上，表体重绘不会丢监听。
     const head = el.poiTable.querySelector("thead");
     if (head) {
@@ -1212,5 +1517,7 @@
     drawBars,
     getCurrent: () => current,
     payloadForRun,
+    buildPngBlob,
+    exportPng,
   };
 })();

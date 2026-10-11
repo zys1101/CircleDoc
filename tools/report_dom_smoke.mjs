@@ -375,7 +375,7 @@ function makeElement(tag, ns) {
   return element;
 }
 
-// report.js 的 cache() 会取 26 个 id：全部预建，这样任何 id 拼错都会在 el.x 上暴露为 null。
+// report.js 的 cache() 会取 27 个 id：全部预建，这样任何 id 拼错都会在 el.x 上暴露为 null。
 const REQUIRED_IDS = [
   "report",
   "report-empty",
@@ -401,6 +401,7 @@ const REQUIRED_IDS = [
   "export-json",
   "export-csv",
   "export-blind-csv",
+  "export-png",
   "export-hint",
 ];
 REQUIRED_IDS.forEach((id) => {
@@ -653,6 +654,7 @@ check("数据来源徽标为 sample（离线报告的诚实标注）", () => {
 check("运行一次后导出按钮解禁", () => {
   if (registry.get("export-json").disabled) throw new Error("JSON 导出仍禁用");
   if (registry.get("export-csv").disabled) throw new Error("CSV 导出仍禁用");
+  if (registry.get("export-png").disabled) throw new Error("PNG 导出仍禁用");
   return registry.get("export-hint").textContent.slice(0, 40);
 });
 
@@ -731,12 +733,9 @@ check("体检完成后状态行同时报出分数与地图叠加数量", () => {
   return text.slice(0, 78);
 });
 
-console.log(
-  failures
-    ? `\n${failures} 项失败${skipped ? `，${skipped} 项跳过` : ""}`
-    : `\n全部通过${skipped ? `（${skipped} 项因数据不含该情形而跳过）` : ""}`
-);
-process.exit(failures ? 1 : 0);
+// 🔴 这里原来还有一份「汇总 + process.exit」：它让文件末尾的 5 条断言（FR-213 表头排序四条
+// + FR-223 盲区导出接线）从建仓起就没执行过，而输出稳定报 15 项 OK，谁都没看出少了东西。
+// 汇总只在**文件末尾**那一份做，加断言的人不必再去找它。
 
 // ---------------------------------------------------------------------------------------------
 // FR-213：表头排序
@@ -821,6 +820,21 @@ check("FR-223：盲区清单导出按钮已接线", () => {
     throw new Error("导出按钮没有 click 监听");
   }
   return "已接线";
+});
+
+// 这里只验接线：合成 PNG 要 CSSOM（getComputedStyle）和真 canvas，Node 的 DOM 桩两样都没有。
+// 真尺寸与字节数在浏览器里量，见 docs/shots/README-isochrone-acceptance.md 的 FR-305 一节。
+check("FR-305：PNG 报告卡按钮已接线、可被单独调用", () => {
+  const button = registry.get("export-png");
+  if (!button) throw new Error("缺少 #export-png");
+  if (!button.listeners.click || !button.listeners.click.length) {
+    throw new Error("PNG 按钮没有 click 监听");
+  }
+  const api = sandbox.window.CircleDocReport;
+  if (typeof api.buildPngBlob !== "function") {
+    throw new Error("未暴露 buildPngBlob，浏览器里没法单独量这张卡");
+  }
+  return "已接线（合成质量在浏览器实测）";
 });
 
 console.log(

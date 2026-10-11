@@ -533,19 +533,41 @@ def test_underscoreless_spelling_belongs_to_regeo_only() -> None:
 
 ### 6.4 导出限缩与版权标识
 
-* **导出只限当前一次分析**：`web/report.js` 的三条出口（`exportJson()` / `exportCsv()` /
-  `exportBlindCsv()`）都只读内存里的 `current` 那一份结果，没有「全库导出」入口，也**不落 `localStorage`**。
+* **导出只限当前一次分析**：`web/report.js` 的四条出口（`exportJson()` / `exportCsv()` /
+  `exportBlindCsv()` / `exportPng()`）都只读内存里的 `current` 那一份结果，没有「全库导出」入口，也**不落 `localStorage`**。
+  PNG 在导出前把引用**定死**在开始那一刻的 `const report = current;` 上——导出期间又点一次体检也不会混用两份结果。
 * **JSON 只导结果对象**（分数 / 多边形 / 统计），不含原始 POI 记录集。
 * **CSV 附来源与禁止二次分发声明**（`FR-213`）。
-* **PNG 截图必须保留版权与审图号**（条款 6.6）——注意本项目当前**没有实现 PNG 导出**，
-  因此不存在裁掉审图号的风险面。这是「功能未做」而不是「合规已满足」，
-  如需补 PNG 导出，这条约束必须一并实现。
-  🔴 **补的时候不能按「把屏幕上那张地图拍下来」设计**：我方图表确实是矢量（雷达图与柱状图由
-  `report.js:130` 的 `svgNode()` 建出，克隆 SVG 走 `data URL → canvas → toDataURL()` 不引入跨域），
-  但 **live 底图是 JSAPI 自己的 `<canvas>`、瓦片跨域且无 CORS 头**，`toDataURL()` 按规范应抛
-  `SecurityError`——这一半**只有代码依据、没有实测**（验证要烧一次 JSAPI 浏览器端配额，按配额纪律等点头）。
-  因此 FR-305 的 PNG 口径预先收口为「**矢量报告卡 + 版权/审图号文字带**」：条款 6.6 要的是导出品里
-  **保留标识**，不是导出品**必须是那张在线瓦片图**。`静态图` API 返回的同样是跨域位图，绕不开这个判定。
+* **PNG 报告卡保留版权与审图号**（条款 6.6，FR-305，2026-10-11 落地）。这里的满足方式是
+  **导出我方矢量报告卡**，而不是「把屏幕上那张地图拍下来」：
+  * **为什么不能拍屏幕**：live 底图是 JSAPI 自己的 `<canvas>`、瓦片跨域且无 CORS 头，`toDataURL()`
+    按规范应抛 `SecurityError`。这一半**至今只有代码依据、没有实测**（验证要烧一次 JSAPI 浏览器端配额，
+    按配额纪律等点头），所以卡片**刻意不碰底图画布**——`test_web_smoke.py` 有一条断言钉住 `toDataURL`
+    在**剥掉注释后的 `report.js` 代码里**出现 **0** 次（原始文件里那 1 次是解释性注释，见 §6.4 上方那段）。
+    `静态图` API 返回的同样是跨域位图，绕不开这个判定。
+  * **标识怎么带**：卡片底部文字带**直接 `document.querySelector(".foot-legal" / ".foot-review")` 读页脚**，
+    不在 JS 里另抄一份合规文案（两处一旦分叉，导出品先错、页脚还对，肉眼看不见）。读不到就**抛错拒绝出图**：
+    6.6 说的是标识「不得删除、掩藏」，静默省掉比导出失败严重。
+  * **图的口径**：卡片画的是页面上**已经画好**的那两张 SVG 的克隆（雷达 `320×320`、柱状图吃满内宽），
+    不在导出路径上重算坐标——「屏幕上看到的」与「导出看到的」必须同一套口径。detached SVG 光栅化时
+    **外部样式表不生效**，所以 `.radar-area` 那套配色按 `getComputedStyle` 的计算值内联成 `style`。
+  * **实测**（chrome-devtools，`mock` 零出网，2026-10-11，端口 8805）：出图 `1 800 × 2 584 px`、
+    `image/png`、**670 295 字节**（页面提示同一数写作「约 655 KB」）；**真实按钮路径**从点 `#export-png`
+    到 `<a download>` 被点 **89 ms**，同一份报告连跑 4 次字节数完全一致（换一份报告变 668 709——
+    差的是卡里那行 `generated_at` 与 `request_id` 的字形，**所以字节数不是回归哨兵**）。
+    `drawImage` 收到 2 个 `IMG`（本征 `640×640` 与 `1688×844` = 逻辑 `320×320` / `844×422` 各乘
+    `PNG_SCALE 2`），`fillText` **19** 行，第 17 行就是 `.foot-review` 整段（`GS(2025)4125`｜
+    `甲测资字11111342`），第 14~16 行是 `.foot-legal` 经 `wrapText` 换行的三截，末行是
+    「本图为矢量报告卡，不含地图底图瓦片…」。
+  * **A/B 实测「拒绝出图」**：把 `.foot-legal` 清空后点真按钮 → 落定提示
+    「PNG 导出失败：报告卡缺合规文案：页脚 .foot-legal 为空。JSON / CSV 导出不受影响。」且
+    `<a download>` 点击次数 **0**；恢复页脚再点 → 提示「已导出…约 655 KB」且点击次数 **1**
+    （`circledoc-walking-116.4074_39.9042-report.png`）。`.foot-legal` 整节点摘掉、`.foot-review` 置空
+    也各 reject 一条同形错误。
+  * **零出网自证**：那一轮 Network 面板 14 条 = `127.0.0.1:8805` **10** 条 + `data:image/svg+xml` **2** 条
+    （两张图的光栅化，不是网络）+ 我自己探针 fetch 的 `blob:` **2** 条，没有任何一条发往公网。
+  * 逐条数字与两条测试基建缺陷（导出提示被门禁函数覆盖、冒烟脚本里 5 条不可达断言）见
+    `docs/shots/README-isochrone-acceptance.md` 的 FR-305 一节。
 
 ### 6.5 页脚是条款 6.6 与 7.3 在本项目唯一的落点（FR-413）
 
@@ -1051,9 +1073,13 @@ PRD §4.5 要的是**可替换**，不是可阅读。」
 **这个代价的实际落点与兜底**：R11 那条「改了 HTML 忘了改 JS」的缺陷形态在本项目里**真实存在**——
 `el.x` 会是 `null`，报告某一块永远空白，而**控制台一条错误都不会有**。兜底是
 `test_web_smoke.py::test_report_js_ids_all_exist_in_the_page`：把 `web/report.js` 里
-`getElementById("…")` 的 **26 个 id**（`grep -o … | sort -u | wc -l` 实测，FR-107 加了 `#profile-badge`）
+`getElementById("…")` 的 **27 个 id**（`grep -o … | sort -u | wc -l` 实测，FR-107 加 `#profile-badge`、
+FR-305 加 `#export-png`）
 全部抠出来，逐个断言 `isochrone.html` 里存在。
-另有一条 `tools/report_dom_smoke.mjs`（Node + 最小 DOM 打桩，15 项断言）真跑渲染路径。
+另有一条 `tools/report_dom_smoke.mjs`（Node + 最小 DOM 打桩，**21 项**断言）真跑渲染路径。
+⚠️ 这个 **21** 前面原本一直是 **15**：脚本里有**两份**「汇总 + `process.exit`」，第一份卡在文件中间，
+让末尾的 5 条断言（FR-213 表头排序四条 + FR-223 盲区导出接线）从建仓起就没执行过——输出稳定报 15 项 OK，
+谁都没看出少了东西。2026-10-11 加 PNG 断言时才发现，删掉中间那份后 20 条全跑、再加 1 条 = **21**。
 
 **顺带的后果**：`§5` 的「总资源 ≤ 500 KB」预算被**大幅超额达成**（第三方依赖 0 字节），
 但 `§5` 字面要求的「Vue 与 ECharts 本地 vendored」这一条**没有满足**。README 需按此如实说明。
@@ -1181,8 +1207,8 @@ mock 掉网络层，连发 20 个请求：
 | ~~**FR-108 地址输入框没有联想**~~ | ✅ **2026-10-11 已实现**：`#suggest-on` 开关（默认关）+ `#suggest-list` 候选列表走 `GET /api/suggest`，选中即 `setCenter(..., "fly")` 落点 | 三条设计口径：① **「默认关闭」是前后端各把一半**——后端 `SUGGEST_ENABLED=false` 只保证不出网，前端开关没勾时**连请求都不发**（否则 Network 里全是 400/200，用户会把「未启用」当 bug 报）；② 门槛常量 `SUGGEST_MIN_KEYWORD_LEN` 两边逐字对齐、前端按**码点**（`Array.from`）数而不是 UTF-16 单元，否则 emoji 会让「前端放行、后端 400」；前端缓存键 `${region}|${keyword}`——换城市等于换答案；③ 候选只渲染**有坐标且在国内**的条目（后端丢一轮、前端 `pair()` 再挡一轮形状漂移），因为「点下去没反应的一行候选」在移动端会被当成页面卡死。🔴 顺带修掉一条**静默配置缺陷**：`suggest_enabled()` 原来兜底读 `os.environ`，而 pydantic-settings 的 `env_file` **只填字段、不写环境变量**，所以 `.env` 里那行 `SUGGEST_ENABLED=true` 从来没生效过（`docs/TEST_REPORT.md` §2.13）。**未验**：真实 `live` 一跳（烧与地点检索**共用**的 100 次/日池子，等用户点头）、`flyTo` 真机（本机无浏览器 AK，只跑 `panTo` 退路）、**`/place/v2/suggestion` 的真实响应字段名**（笔记 §2.4 只记了请求参数，`_parse_suggest` 的字段是按同类接口推的）。七例证据见 `docs/shots/README-isochrone-acceptance.md` 的「FR-108 地址联想」一节 |
 | ~~**样例社区坐标的真实性**~~ | ✅ **2026-10-10 已补验**（`gen_samples.py --verify` 走 `/api/suggest` + 逆地理交叉核对行政区） | 三份清单标 `coord_verified: true`，含义是「**工具核验过且行政区对得上**」，不是人工实地踏勘；`/api/samples` 原样透出该标记。🔴 教训：**geocode 只能给到城市级坐标**，「非空就算核验」会把三个错坐标一起标成已核验（`docs/TEST_REPORT.md` §2.8） |
 | **`live` 模式下 `market` 的召回** | 检索词 `市场$超市$便利店` 被「市场监督管理局」（`政府机构;行政单位`）等同名机构挤占，`tag` 过滤实测反而把结果清空 | FR-221 的盲区主判定依赖 `market` ∩ `pharmacy` ∩ `primary_school`，`market` 恒为 0 → **`live` 盲区面积系统性偏大**（交道口 62.29 %、肖家河 86.89 %）。本轮口径是**接受并明示**：后端对**真实检索那一侧**（`data_source = live` **与 `cache`**）的报告在 `notes` 里挂提示，`mock` 口径不受影响。`cache` 必须一起算——缓存里存的就是同一份真实返回（`docs/TEST_REPORT.md` §2.9）。试验数据与三条约束见 `docs/TEST_REPORT.md` §4.4 |
-| **浏览器内真实渲染** | 本环境的无头 Chrome 无输出 | §10.2 / §10.3 的图表与 DOM 结论来自 Node + 最小 DOM 打桩真跑的两条渲染路径（`tools/report_dom_smoke.mjs` 15 项 + `tools/map_layers_smoke.mjs` 12 项断言，`grep -c 'OK '` 实测），它**不是**真实浏览器 |
-| **PNG 报告导出** | 功能未实现 | §6.4：条款 6.6 的「截图必须保留版权与审图号」目前无对应风险面，但补该功能时必须一并实现该约束。🔴 设计口径已预先收口为「矢量报告卡 + 标识文字带」而不是「拍实时底图」——我方图表确实是矢量（`report.js:130` `svgNode()`），但 live 瓦片画在 JSAPI 自己的跨域 `<canvas>` 里，`toDataURL()` 按规范应抛 `SecurityError`，**这一半只有代码依据、没有实测**（验它要烧一次 JSAPI 浏览器端配额） |
+| **浏览器内真实渲染** | 两条通道分工，别再混为一谈 | **Node + 最小 DOM 打桩**跑两条绘制路径（`tools/report_dom_smoke.mjs` **21 项** + `tools/map_layers_smoke.mjs` 12 项断言，`grep -c 'OK '` 实测）——它没有 CSSOM 与 canvas，只能验「节点建对了」。**真实 Chrome**（chrome-devtools MCP）验打桩量不到的那一半：计算样式、network、console，以及 FR-305 那张 PNG 的像素与字节。早先记的「无头 Chrome 无输出」是 browser-use 通道的限制，不影响 chrome-devtools |
+| ~~**PNG 报告导出**~~ | ✅ **2026-10-11 已落地**：`exportPng()` 出「矢量报告卡 + 合规文字带」，浏览器实测 `1 800 × 2 584 px`、`image/png`、**670 295 字节**、真实按钮路径点下 → `<a download>` **89 ms**、`fillText` **19** 行、`drawImage` **2** 个位图；同一份报告连跑 4 次字节数完全一致 | §6.4。条款 6.6 的标识由**直接读页脚**带上（读不到就拒绝出图：实测清空 `.foot-legal` 后点真按钮，落定提示给出原因且 `<a download>` 点击次数 **0**，恢复后变 **1**）。🔴 **仍未验的有两半**：① live 底图能不能截——瓦片画在 JSAPI 自己的跨域 `<canvas>` 里，`toDataURL()` 按规范应抛 `SecurityError`，这条**只有代码依据**（验它要烧一次 JSAPI 浏览器端配额，等点头），卡片因此**刻意不碰底图**，并由 `test_web_smoke.py` 钉住 `toDataURL` 在剥掉注释后的 `report.js` 代码里出现 **0** 次；② **真实落盘**——本轮把 `<a download>` 拦下来量了 blob，文件没真写进下载目录，「双击能打开、打开看到的就是这张卡」要人点一次才算验完 |
 | ~~**FR-413 页脚缺合规声明与审图号**~~ | ✅ **2026-10-11 已补齐**：`.foot-links`（含官方隐私政策与服务条款外链）+ `.foot-legal`（缓存性质与 TTL、合成示例声明、导出边界）+ `.foot-review`（审图号与测绘资质，带读取日期） | 三个落点、两种失效方式、两套守卫，逐条见 §6.5。🔴 **仍有一项做不到自动**：审图号是官方 HTML 页脚里的字符串，没有机器可读真值，自动化只能验「这一行在不在」——号码过期属**季度人工复核**（README §10.7）。同轮顺带修掉两条页脚相关缺陷：一键体检路径的 `request_id` 一直没交到页脚（`docs/TEST_REPORT.md` §2.15）、正文借用 `--muted` 导致对比度只剩 0.01 余量（§2.16） |
 | **官方未公开的数值** | 需登录控制台核实 | `localhost` 能否作为 Referer 白名单、地点检索 `page_size` 真实上限是 10 还是 20、逆地理 `pois` 返回条数上限、JSAPI 4.0 下热力图插件可用性——`§7.4` 已按保守值设计（10 且不翻页） |
 

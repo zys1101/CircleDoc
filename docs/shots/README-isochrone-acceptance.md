@@ -889,18 +889,197 @@ README §9.7、`web/app.css` 注释和测试 docstring 三处，本轮重算是 
   状态行是 `web/report.js:1038` 的 `setInterval` 每秒走字。已在 README §10.7 / DESIGN §12 就地登记，
   没有写成「已完成」。
 
+## FR-305 报告卡 PNG · 零出网浏览器实测（2026-10-11，实现人自验，零出网）
+
+PRD FR-305（**P1**）要求「一键导出报告卡 PNG」，而条款 **6.6** 要求导出品里**不得删改**版权与审图号标识。
+本项目把这张卡定成「**我方矢量内容合成的报告卡 + 合规文字带**」，**不截地图底图**（理由见 DESIGN §6.4）。
+这一轮验四件事：按钮真在页面上并跟着门禁走、合规带是**从页脚读**而不是在 JS 里再抄一份、
+合成路径**一次都没碰底图 canvas**、以及整条链路零出网。
+
+### 0. 前提与零出网自证
+
+- 服务：`BAIDU_SERVER_AK= BAIDU_BROWSER_AK= ./.venv/Scripts/python.exe -m uvicorn api.app:app --port 8805`
+  （两个 AK 用**空环境变量**压住 `.env` 里那对真实 AK）。
+- `GET /api/health` 本轮复测：`http=200`、`status=offline`、`ok=true`、`data_mode=mock`、
+  `baidu_reachable=false`、`server_ak_type=not_configured`、`browser_ak_type=not_configured`、
+  `services_enabled` **6/6 全 false**。
+- `POST /api/analysis`（`{"lnglat":[116.4074,39.9042],"mode":"walking","minutes":15}`）：
+  HTTP **200**、`x-request-id: 04a8a4522ff34e48`、`x-http-requests: 0`、`x-place-calls: 0`，
+  `usage` = `{http_requests: 0, quota_units: 0, place_calls: 0, cache_hits: 0, elapsed_ms: 20}`。
+  ⚠️ 卡片上那一行「本次调用：HTTP 0 次…」就是照着这个 `usage` 画的——**零出网由导出品自己声明**。
+- 浏览器侧那份报告：`request_id=6a5db27de42f4d6b`、`meta.generated_at=2026-10-11T10:40:23+00:00`、
+  `meta.data_source=sample`、完整档 **12 方向**。
+- 🔴 **Network 面板本轮 14 条，逐条本地**：`127.0.0.1:8805` 共 **10 条**
+  （`isochrone.html` + `app.css` / `isochrone.css` / `report.css` + `isochrone.js` / `report.js`
+  + `/api/regeo` / `/api/health` / `/api/samples` / `POST /api/analysis`）、
+  `data:image/svg+xml;charset=utf-8,…` **2 条**（雷达与柱状图各自的光栅化，不是网络）、
+  `blob:http://127.0.0.1:8805/…` **2 条**（我探针 fetch 回来量尺寸用）。
+  **没有一条发往 `*.baidu.com` / `lbsyun.*` / 任何公网地址**，本轮不占任何配额。
+- Console 本轮 **1 条** error：`net::ERR_FILE_NOT_FOUND`。它是**我的探针**第二次去 fetch 一条已被
+  `URL.revokeObjectURL()` 回收的 blob URL 造成的——`downloadBlob` 在 `setTimeout(…, 0)` 里回收是**正确行为**，
+  不是应用缺陷。这条同时反证了一件好事：**blob URL 真的会被及时回收**，导出的图片不会在内存里挂着。
+
+### 1. 门禁：PNG 按钮和另外三条导出按钮一起开关（点的是页面上的真按钮，不是打桩）
+
+| 状态 | `#export-png.disabled` | `#export-hint` 文案（逐字） |
+| --- | --- | --- |
+| 刚加载（还没跑过） | **true**（与 `#export-json` / `#export-csv` / `#export-blind-csv` 四条一起 true） | 「先跑一次体检，才有可导出的结果。」 |
+| 点「一键体检」后 | **false**（`runMs` 实测 **114** ms 后解禁） | 「导出内容仅限**当前这一次**分析。PNG 是矢量报告卡，不截取地图底图，因此不触碰底图瓦片的版权与使用条款。」 |
+| 点 PNG 的瞬间（同步读） | **true** ← 自锁，防连点混用两份结果 | 「正在合成 PNG 报告卡（矢量图表 + 合规文字带，不含地图底图）…」 |
+| 出图完成 | **false** | 「已导出 PNG 报告卡（1800 px 宽，约 655 KB）。内容仅限本次分析，不得二次分发。」 |
+
+`exportPng()` 第一件事是 `const report = current;`——把引用**定死在点按钮那一份**报告上，
+所以导出期间再来一次分析也不会把两份结果混进一张卡。
+
+### 2. 合成结果实测
+
+| 量 | 值 | 怎么量的 |
+| --- | --- | --- |
+| MIME | **`image/png`** | `blob.type` |
+| 像素 | **1 800 × 2 584** | `createImageBitmap(blob)` 的 `width/height`（宽 = `PNG_W 900 × PNG_SCALE 2`；**高度是两遍布局算出来的**，不是写死） |
+| 字节 | **670 295** | `blob.size`；提示里的「约 655 KB」正是 `Math.round(670295/1024)=655`，两处自洽 |
+| 真实按钮路径耗时 | **89 ms**（点按钮 → `<a download>` 被点） | 拦下 `HTMLAnchorElement.prototype.click` 记时间戳 |
+| 落盘文件名 | `circledoc-walking-116.4074_39.9042-report.png` | 同上，读 `a.download` |
+| 同一份报告连跑 4 次 | **670 295 × 4**（distinct = 1），**82 / 85 / 50 / 58 ms** | 直接调 `CircleDocReport.buildPngBlob(getCurrent())` |
+| 另一份报告连跑 3 次 | **668 709 × 3** | 同一张表换了 `request_id=d6886aa87eef4e7b` 那份报告 |
+| `fillText` 行数 | **19** | 包一层 `CanvasRenderingContext2D.prototype.fillText` 计数 |
+| `drawImage` 次数与图源 | **2** 个 `IMG`，本征 **640×640** 与 **1688×844** | 同上（本征 = 逻辑 320×320 与 844×422 各乘 `PNG_SCALE 2`，光栅化按设备像素给，`drawImage` 才是 1:1 贴图） |
+
+⚠️ **两个数不能当回归哨兵**：字节数**随报告变**（`668 709` ↔ `670 295` 差的就是卡片里 `generated_at`
+与 `request_id` 那两行的字形），只有「**同一份报告**连跑必得同一字节数」这条是确定性的。
+⚠️ **冷跑没量出数**：页面重载后我第一次点按钮时，900 ms 的探针还没抓到下载事件，之后几次都是 ~89 ms。
+说明**首次合成明显慢于热跑**（SVG 光栅化要等图片解码），但我没有冷跑的确切毫秒数，就不写进表里。
+
+### 2b. 画布原语逐条数（把「卡片真有内容」做成可查的账）
+
+包住 `scale` / `fillRect` / `stroke` / `fillText` 再合成一次，**blob 仍是 670 295**——
+说明这层 instrumentation 不改变输出，下面的数就是产品那条路径的数：
+
+| 量 | 实测值 | 说明 |
+| --- | --- | --- |
+| `ctx.scale` | `scale(2, 2)` **1** 次 | 只在真画那一遍调；`dryRun` 一遍不碰画布 |
+| 背景 `fillRect` | `#ffffff`，`0, 0, 900, 1292`，**1** 次 | **逻辑 900 × 1292** → 设备 `1800 × 2584`，与 `× PNG_SCALE 2` 自洽；**1292 是两遍布局算出来的高度，不是常量** |
+| `stroke()`（分隔线） | **2** 次，均 `strokeStyle=#d8dee4`、`lineWidth=1` | 两个 `rule()`（分数前 / 合规带前），都写在 `!dryRun` 分支里 |
+| `drawImage` | **2** 次，本征 `640×640` 与 `1688×844` | 逻辑 `320×320` / `844×422` 各乘 2 |
+| `fillText` 字号分布 | 22 px（600）**1** · 30 px（bold）**1** · 15 px（600）**1** · 13 px **11** · **12 px 5** | 合计 **19** 行；**最后 5 行全是 12 px，那就是合规文字带**（逐字见 §3） |
+
+### 3. 合规文字带：读页脚，不是再抄一份
+
+卡片最后 5 行 `fillText` 逐字（本轮实测抓取）：
+
+```
+[14] 本服务使用百度地图开放平台的接口与数据（地理编码 / 逆地理 / 地点检索 / 路线规划与批量算路）。
+     本地缓存仅为减少重复调用的技术措施，不是可对外查询        ← .foot-legal 经 wrapText 换行
+[15] 的数据源：地点数据 ≤ 24 小时、路线 ≤ 7 天、地理编码与逆地理 ≤ 30 天，到期即物理删除。
+     示例数据由本程序按参数合成，不含任何第三方原始记录；导出
+[16] 仅限当前一次分析的结果，不得二次分发。
+[17] 地图审图号：GS(2025)4125｜测绘资质：甲测资字11111342 （读自 lbsyun.baidu.com 页脚，2026-10-11）
+[18] 本图为矢量报告卡，不含地图底图瓦片；如需底图图像，请自行保留其版权与审图号标识。
+```
+
+`[14]`~`[16]` 就是页脚 `.foot-legal`（折叠空白后 **176** 字符）被 `wrapText` 按 844 px 内宽换行的产物，
+`[17]` 是 `.foot-review`（**72** 字符）整段——也就是说页脚改了字，卡片**自动跟着改**，不存在两处维护。
+
+「唯一真相源」的直接证据（本轮 grep，含退出码）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `grep -c 'GS(2025)4125' web/report.js` | **0** |
+| `grep -c '甲测资字' web/report.js` | **0** |
+| `grep -c 'GS(2025)4125' web/isochrone.html` | **1** ← 只在这里 |
+| `grep -c 'foot-legal' web/report.js` | **1** ← 只有 `complianceText(".foot-legal", …)` 那一次读取 |
+| `grep -n 'toDataURL' web/report.js` | **1 处，在第 958 行的注释里**；把注释剥掉后 `report.js` 代码里出现 **0** 次（`test_png_card_does_not_read_the_basemap_canvas` 用的就是剥注释后的口径） |
+
+另外卡片第 `[2]` 行本身写的是 `数据来源 sample · 完整档（12 方向）· 生成于 … · request_id …`，
+第 `[12]` 行是结论里那条「本次结论基于程序合成的示例数据（mock_mode）」——**降级/示例声明也在图上**。
+
+### 4. 负路径：页脚一旦读不到，就**拒绝出图**
+
+三条都在真实页面上做完，每条都**没有** fallback 字符串（`complianceText(selector)` 单参、缺文案即抛）：
+
+| 操作 | `buildPngBlob` 结果（错误文案逐字） |
+| --- | --- |
+| `.foot-legal` 文本置为空白 | reject `报告卡缺合规文案：页脚 .foot-legal 为空` |
+| `removeChild(.foot-legal)` 整个节点摘掉 | reject `报告卡缺合规文案：页脚 .foot-legal 为空`（与空白走同一条 `if (!text)`） |
+| `.foot-review` 置空 | reject `报告卡缺合规文案：页脚 .foot-review 为空` |
+
+真实按钮路径下这条 reject 会走 `exportPng()` 的失败分支，实测提示与门禁：
+
+```
+点按钮（.foot-legal 已被清空）
+  → 同步：disabled=true、提示「正在合成 PNG 报告卡…」
+  → 落定：disabled=false、提示「PNG 导出失败：报告卡缺合规文案：页脚 .foot-legal 为空。JSON / CSV 导出不受影响。」
+把页脚恢复后再点一次
+  → 「已导出 PNG 报告卡（1800 px 宽，约 655 KB）。内容仅限本次分析，不得二次分发。」
+```
+
+🔴 **为什么是拒绝出图而不是"少打一行"**：条款 6.6 原文要的是「不得删除、掩藏、修改或替换」标识。
+一张**静默缺了审图号**的 PNG 会被用户当合规品转出去，比导不出来糟得多。宁可导出失败。
+
+### 5. 本轮抓到并修掉的两条（都不是功能本身，是**测试基建**）
+
+1. **`syncExportState()` 把结果提示冲掉了**：原来两个分支都先回门禁再写提示，
+   而 `syncExportState()` 会把 `#export-hint` 刷回默认文案 → **成功 / 失败 / 进行中三态看起来一模一样**。
+   这条只有真浏览器能照出来（静态测试当时还是绿的）。修法：**先 `syncExportState()`、后写提示**，
+   并在 `test_png_card_button_is_wired_and_gated` 里按 `(error) => {` 把成功/失败两支**拆开各查一次顺序**。
+   ⚠️ 第一版断言写的是 `runner.rfind("syncExportState();", 0, runner.index("PNG 导出失败"))`，
+   在**坏代码上也通过**（成功分支那次调用就在失败文案前面），负例跑出来是「失败 old order rejected = False」——
+   改成分支级断言后两个负例才都拒绝。这条教训登记在 TEST_REPORT §2.19。
+2. **`tools/report_dom_smoke.mjs` 里有 5 条 `check()` 从 `f24a174` 起永远执行不到**：文件中部遗留了一段
+   早退的 summary + `process.exit`，导致冒烟一直报「15 项」而实际写了 20 条。删掉早退块后本轮
+   `grep -c '^check('` = **21**、`grep -c 'OK '` = **21**（新增了 FR-305 那条 `buildPngBlob` 接线检查），
+   `exit=0`。口径固化：**冒烟条数用这两个 grep 对拍，不手写**。详见 TEST_REPORT §2.18。
+
+### 6. 本轮**没有**验的（别当成已验）
+
+1. 🔴 **真实落盘**：本轮把 `<a download>` 的点击**拦下来**测字节 / 尺寸 / 文件名，
+   文件**没有真的写进下载目录**（刻意不往你的机器落盘）。「双击能打开、打开看到的和 blob 一致」
+   这一条要人在浏览器里点一次按钮才算验完。
+2. 🔴 **canvas taint 那一半仍未实测**：live 底图下 `toDataURL()` 会抛 `SecurityError`
+   **只有代码与规范依据**。验它要开一次 live 底图 = 烧 JSAPI 浏览器端配额，按配额纪律等点头。
+   对本功能**不构成阻塞**（卡片根本不读底图 canvas），只影响「以后有人想加底图截图」那条路。
+3. **live / 真实 AK 下的两行文案**：本轮只在 mock（`data_source=sample`、完整档 12 方向）量过；
+   live 下 `meta.degraded` / `degraded_reason` 会不会给出来、卡片那条黄色警示行
+   （`PNG_WARN #9a6700`，白底对比度实测 **4.87:1**）会不会出现，未跑。
+4. **纸质可读性**：1 800 px 宽 / 655 KB 只保证「聊天工具里放大可读」，A4 打印下 12 px 小字未评。
+5. **真机**：移动端 `data-sheet-mode=mobile` 下导出 PNG 的完整链路（本轮全部在 1280×800 桌面档跑）。
+
+### 7. 提交之前的门禁
+
+- `./.venv/Scripts/python.exe -m pytest -q` → **506 passed**，对最终代码状态连跑五次
+  `exit=0`（4.93 / 4.97 / 4.84 / 4.81 / 4.85 s）。
+- `ruff check .` `exit=0`；`black --check .` **49 files would be left unchanged** `exit=0`。
+  ⚠️ 本轮 black **首跑 `exit=1`**，改的是新加断行的 `assert … , "msg"` 形态；另外我自己在仓库根留的
+  `.measure305.py` / `.png-contrast.py` 两个临时脚本也被 ruff 抓到——删掉才干净（临时脚本别落在仓库根）。
+- `node --check web/report.js` / `node --check web/isochrone.js` 各 `exit=0`
+  （⚠️ 别把 `.js` 交给 black：`black --check tests/… web/report.js` 实测 `exit=123`，JS 只能用 `node --check`）。
+- `node tools/report_dom_smoke.mjs` → `exit=0`，`grep -c 'OK '` = **21** 且 `grep -c '^check('` = **21**
+  （两个 grep 对拍，本轮新加的 FR-305 那条在其中）；
+  `node tools/map_layers_smoke.mjs _map_input.json` → `exit=0`，`OK ` = **12** = `^check(` = **12**。
+- DOM 与体积计数本轮全部重测：`grep -o 'getElementById("…")' | sort -u | wc -l` →
+  `report.js` **27**（新增 `export-png`）、`isochrone.js` **62**；`isochrone.html` 去重 id **97**；
+  `wc -c web/* | tail -1` → **276 678 字节 = 270.2 KB = PRD §5 预算的 54 %**；
+  `pytest tests/test_web_smoke.py --collect-only -q` → **59 例**。README §10.4 / §10.7 与 DESIGN §10
+  里这几个数**逐个对上了实测值**，没有沿用上一轮的写法。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。
 2. 双指缩放——代码只实现滚轮缩放（`wheel`，passive:false），**未见双指 pinch 处理**，触摸屏可能无法缩放（建议评审真机确认后立 P2）。
 3. iOS Safari 滚动穿透 / 100vh 地址栏抖动——未测。
-4. DevTools Network offline 下切 live 触发真实 JSAPI 注入失败 → 降级横幅全链路——本环境无拦截工具且禁真实出网，未跑（见项 7）。
+4. DevTools Network offline 下切 live 触发真实 JSAPI 注入失败 → 降级横幅全链路——本环境无拦截工具且禁真实出网，未跑（风险口径见 README §10.7 那一张表）。
 5. ~~截图证据全部未落地（in-app browser 无可见 surface）~~ → 2026-10-10 起 chrome-devtools 通道**能**截图，
    但按上一节「关于截图」的口径仍**不提供 PNG**，本文件继续以 DOM/计算样式/network/console 文字证据为准。
    早先那条 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE` 限制属 browser-use 通道，与本轮用的 chrome-devtools 不是同一条路径。
 6. **FR-108 的中文输入法路径**——真机上拼音是 composition 期间连续触发 `input`，且软键盘顶起视口会改变
    `#controls` 的可视高度；本轮 CDP 走的是「直接改 `value` + 派发 `input`」，两者都不等于真机键盘。
    逐条边界见上面「FR-108 地址联想」§4。
+7. **FR-305 的 PNG 有没有真的落到磁盘上**——本轮把 `<a download>` 的点击**拦下来**测了 blob 的类型 / 字节 /
+   尺寸 / 文件名，但**刻意没让浏览器往下载目录写文件**。`downloadBlob` 的形状
+   （`createObjectURL → a.click → setTimeout(revoke, 0)`）是标准做法，blob 也确实是 `image/png` 且
+   `createImageBitmap` 解得开，可「双击打开、看到的就是这张卡」这一条要人在真浏览器里点一次才算验完。
+8. **FR-305 另一半：live 底图能不能截**——`toDataURL()` 在未命名允许的跨域画布上应抛 `SecurityError`
+   只有代码与规范依据，验它要开一次 live 底图（JSAPI 浏览器端配额），等点头。详见「FR-305 报告卡 PNG」§6。
 
 ## 收尾
 
@@ -924,3 +1103,13 @@ README §9.7、`web/app.css` 注释和测试 docstring 三处，本轮重算是 
 - FR-108 那一轮（2026-10-11，同日）起的 `8803`（联想七例）已 `taskkill`（`pid=10500`），
   `netstat -ano | grep -c '880[0-9].*LISTENING'` 实测 **0**；`.fr108-scratch/` 与复跑冒烟用的
   `_map_input.json` 已删除，设备模拟复位 `1280x800x1`。逐条见上面「FR-108 地址联想」§0 ~ §5。
+- FR-305 那一轮（2026-10-11，同日）起的 `uvicorn api.app:app --port 8805`（pid 3620，同样用空 AK 环境变量
+  压住真实 AK）已 `Stop-Process`，验完 `netstat -ano | grep -cE ':880[0-9].*LISTENING'` 实测 **0**；
+  整条 88xx 段只剩 `127.0.0.1:8888`（pid 4708，上一会话遗留的无关进程，按「不杀不属于本轮的进程」留着）。
+  临时件 `.fr305-health.json` / `.fr305-health2.json` / `.fr305-a.json` / `.fr305-h.txt` /
+  `.fr305-server.log` / `.domsmoke.txt` / `.d2.txt` / `.d3.txt` / `.d4.txt` / `.m3.txt` /
+  `.mapsmoke.txt` / `.pt.txt` / `_map_input.json` 全部删除；实测过程中**没有**让浏览器往下载目录写文件
+  （`<a download>` 被拦下），所以磁盘上不留 PNG。chrome-devtools 那条标签页已回 `about:blank`，
+  设备模拟停在 `1280x800x1`。
+  🔴 仓库根本轮两次被自己的临时脚本脏到：`.measure305.py` / `.png-contrast.py` 让 `ruff` 与 `black`
+  首跑 `exit=1`。口径：**临时脚本放仓库外或用完即删**，别指望门禁替你记住。

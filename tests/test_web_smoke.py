@@ -985,3 +985,116 @@ def test_suggest_list_is_styled_and_announced_in_every_state() -> None:
     assert sheet_rule(".suggest-item") and "min-height: 44px" in sheet_rule(
         ".suggest-item"
     ), "候选行是触摸目标，移动端热区要 ≥ 44 px（PRD §6.3）"
+
+
+# --------------------------------------------------------------------------------------
+# FR-305：PNG 报告卡（导出品的合规那一半）
+# --------------------------------------------------------------------------------------
+def test_png_card_button_is_wired_and_gated() -> None:
+    """按钮要在 HTML 里、要取到、要接上点击、要进门禁，而且结果提示要在门禁**之后**写。
+
+    各抓一种坏法：
+      * 漏 id / 漏监听 → 「点了没反应」，控制台一声不响。
+      * 漏门禁 → 没跑体检也能出一张卡，上面的数字全是空壳。
+      * 提示写在 `syncExportState()` 前面 → 成功与失败文案立刻被默认提示覆盖。
+        🔴 这一条不是假想：浏览器实测第一轮就是这么写的，三种状态（成功 / 页脚缺失 /
+        恢复）提示框显示的都是同一句默认文案，等于整个反馈通道是死的。
+    """
+    html = ISOCHRONE_HTML.read_text(encoding="utf-8")
+    assert 'id="export-png"' in html, "缺少 #export-png"
+
+    code = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    assert 'el.exportPng = document.getElementById("export-png");' in code
+    assert 'if (el.exportPng) el.exportPng.addEventListener("click", exportPng);' in code
+    gate = js_function(code, "function syncExportState()", "\n  function ")
+    assert "if (el.exportPng) el.exportPng.disabled = disabled;" in gate, "PNG 按钮没进导出门禁"
+
+    runner = js_function(code, "function exportPng() {", "\n  function ")
+    assert "const report = current;" in runner, "导出期间又来一次分析会混用两份结果"
+    # 分支各自判：只看「整个函数里有一次 syncExportState 在提示前面」会漏掉失败分支写反，
+    # 因为成功分支那次调用本来就在它前面。
+    ok_branch, sep, fail_branch = runner.partition("(error) => {")
+    assert sep, "exportPng 的失败分支不见了"
+    for name, body, phrase in (
+        ("成功", ok_branch, "已导出 PNG 报告卡"),
+        ("失败", fail_branch, "PNG 导出失败"),
+    ):
+        assert phrase in body, f"{name}分支没有写结果提示"
+        assert body.index("syncExportState();") < body.index(
+            phrase
+        ), f"{name}分支的提示会被 syncExportState() 的默认文案吃掉"
+
+
+def test_png_card_takes_its_compliance_text_from_the_footer() -> None:
+    """条款 6.6 / 7.3 那两行在 PNG 里只能是**页脚本身**，不能在 JS 里再抄一份。
+
+    抄一份就是两处要维护：两处一分叉，导出品里的声明先错、页脚还对，肉眼看不见。
+    读不到页脚时选择「不出图」而不是「省掉这两行」——静默省略标识比导出失败严重。
+    """
+    code = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    reader = js_function(code, "function complianceText(selector) {", "\n  function ")
+    assert "document.querySelector(selector)" in reader
+    assert "throw new Error(" in reader, "读不到合规文案必须失败，不能出静默丢标识的卡"
+    assert "fallback" not in reader, "合规文案的第二份真相源又回来了"
+
+    for selector in ('".foot-legal"', '".foot-review"'):
+        assert f"complianceText({selector})" in code, f"报告卡没有直接读 {selector}"
+    html = ISOCHRONE_HTML.read_text(encoding="utf-8")
+    for css_class in ("foot-legal", "foot-review"):
+        assert f'class="{css_class}"' in html, f"页脚缺 .{css_class}，complianceText 会一直抛"
+
+
+def test_png_card_does_not_read_the_basemap_canvas() -> None:
+    """🔴 报告卡只能画我方矢量内容：不许碰地图底图的画布。
+
+    JSAPI 的瓦片画在它自己的 `<canvas>` 里，图源是百度域名且不带 CORS 响应头。
+    真去 `toDataURL()` 有两条后果：一是按规范画布 tainted、直接抛 `SecurityError`；
+    二是就算成功，也把百度的底图截图当成了我方导出物——条款 6.6 要「保留标识」，
+    不是授权我们把在线瓦片图重分发。这条断言钉的是有人日后顺手加「一键截图」的诱惑。
+    """
+    code = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    assert "toDataURL" not in code, "报告卡不该从画布反读像素"
+    assert "drawImage(chart.image" in code, "卡片上唯一的位图来源是那两张 SVG"
+
+    builder = js_function(code, "function cardCharts() {", "\n  function ")
+    assert "{ host: el.radar, width: 320 }" in builder
+    assert (
+        "{ host: el.bar, width: PNG_W - PNG_PAD * 2 }" in builder
+    ), "两张图的宿主必须是报告面板自己的 SVG，不是地图"
+
+
+def test_png_chart_rasterization_survives_cjk_labels() -> None:
+    """SVG 内联成 data URL 必须走 `encodeURIComponent`，不能用 `btoa`。
+
+    雷达与柱状图里全是中文（六维名、类别名、单位）。`btoa` 遇非 Latin1 直接抛
+    `InvalidCharacterError`，那张卡就永远出不来 —— 而这正是最容易「本地英文数据测过、
+    中文一上线就坏」的那种错。
+    """
+    code = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    svg = js_function(code, "function svgToImage(pack) {", "\n  function ")
+    assert "encodeURIComponent(text)" in svg
+    assert "data:image/svg+xml;charset=utf-8" in svg
+    assert "btoa" not in svg
+    # detached 的 SVG 不吃外部样式表：配色必须按计算值内联，否则导出是一张无填充的线框图。
+    clone = js_function(code, "function cloneChart(host, drawWidth) {", "\n  function ")
+    assert "getComputedStyle(source)" in clone
+    assert 'clone.setAttribute("xmlns", "http://www.w3.org/2000/svg")' in clone
+
+
+def test_png_card_ink_passes_aa_on_the_card() -> None:
+    """卡片三种文字色对卡底都要过 AA 的 4.5:1；分隔线是装饰件，不参与比对。
+
+    与页脚那条同一条理由（条款 7.3 要「显著」）。数字是本轮实测：INK 15.52、
+    FAINT 7.56、WARN 4.87 —— WARN 只用在降级提示那一行，余量 0.37 是三个里最紧的。
+    """
+    code = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    bg = re.search(r'const PNG_BG = "(#[0-9a-fA-F]{6})"', code)
+    assert bg, "卡片底色不再是可解析的十六进制，这条断言失去比对对象"
+    got = {}
+    for name in ("PNG_INK", "PNG_FAINT", "PNG_WARN"):
+        m = re.search(rf"const {name} = \"(#[0-9a-fA-F]{{6}})\"", code)
+        assert m, f"缺少 {name} 配色常量"
+        got[name] = m[1]
+    for name, color in got.items():
+        ratio = wcag_ratio(color, bg[1])
+        assert ratio >= 4.5, f"{name} {color} 对 {bg[1]} 只有 {ratio:.2f}:1，卡片正文不过 AA"
