@@ -304,7 +304,7 @@ node tools/map_layers_smoke.mjs _map_input.json         # 地图两个叠加图�
 | POST | `/api/isochrone/polyline` | 点中顶点才补调真实路径。**懒加载**，单次分析 `direction` 调用**硬上限 12 次**，超限不报错、回 `allowed=false` + 可读文案 | FR-203、D8 |
 | POST | `/api/poi` | 按 6 大民生维度检索 POI。固定携带 `radius_limit=true`、`coord_type=3`（**数字**）、`filter=sort_name:distance`、`page_size=10`、`page_num=1` | FR-210、FR-211、FR-214 |
 | POST | `/api/analysis` | **一键体检（主接口）**：等时圈 → POI → 落圈 + 前 K 实测 → 盲区 → 评分与摘要。响应含 `usage`（三栏分开）与 `assertions`（与 §6.1 上限逐条对照的自证表） | FR-201 ~ FR-304 |
-| GET | `/api/analysis/{task_id}` | 体检进度轮询。任务记录只存在**进程内存**且上限 32 条，重启或跨进程查不到返回 404 + 「请重新发起体检」的可读文案 | FR-205 |
+| GET | `/api/analysis/{task_id}` | 体检进度轮询。任务记录只存在**进程内存**且上限 32 条，重启或跨进程查不到返回 404 + 「请重新发起体检」的可读文案。⚠️ **前端当前不调用这个端点**（体检走同步路径，状态行是本地计时器近似），见 §10.7 | FR-205 |
 | GET | `/api/samples` | 预置样例社区列表。来自 `config/samples.yaml`，**只读清单、不出网、不合成数据** | FR-102 |
 
 另有 FastAPI 自带的 `/api/docs`（Swagger UI）与 `/api/openapi.json`。
@@ -839,6 +839,7 @@ PRD §4.3 第 4 条写的是「圈内 + **直线距离最近的前 K 个**」，
 
 | 项 | 说明 |
 | --- | --- |
+| 🔴 **FR-205 只完成了后端那一半**（2026-10-11 自查发现，未修） | `api/analysis.py` 的进度通道是**真的**：`background: true` → `202` + `task_id`，`GET /api/analysis/{task_id}` 回 `run_analysis(progress=...)` 的**真实阶段回调**记录（`test_analysis_api.py` 46 例里含「任务轮询 + 后台模式」两条）。🔴 **但前端没有接它**：一键体检走同步 `POST /api/analysis`，状态行由 `web/report.js:1038` 的一个 `setInterval` 每秒走字（文案「已等待 N s；阶段表在响应里」），**没有任何一处调用 `/api/analysis/{task_id}`**（`grep -n 'task_id' web/*.js` 实测 0 命中）。所以 PRD FR-205 那句「前端流式或轮询更新」目前只满足「展示进度」，不满足「轮询真实阶段」——它是 P2，且刻意**不伪装成已完成**：文案里明确写了阶段表在响应里、不假造百分比。补齐要做两件事：把默认路径切成 `background: true` + 轮询（零配置演示要多担一次轮询失败点，见 `api/analysis.py:19` 的取舍说明），以及热力图/等时圈这类长任务复用同一通道。 |
 | **浏览器内真实渲染** | 本环境的无头 Chrome 无输出（被沙箱挡住）。改用 Node + 最小 DOM 打桩**真跑** `web/report.js` 的渲染路径（`tools/report_dom_smoke.mjs`，**15 项**断言全部通过，`grep -c 'OK '` 实测），但它**不是**真实浏览器 |
 | **前端截图** | 截图**能拍到**（chrome-devtools MCP，2026-10-10 已用它确认过实时底图与真实路网轨迹），但本项目**仍不把 PNG 落进仓库**：一是截图里必然含百度的瓦片与版权条，二是文档里的 DOM 计数 / network / console 文字证据可复核、可 grep。历史上 browser-use 那条 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE` 限制针对的是另一个通道，不影响 chrome-devtools |
 | ✅ **JSAPI 实时底图上的顶点点击**（2026-10-10 已验） | 真跑通：`BMap.Map` 实例化、23 个 `div.BMap_Marker` 覆盖物、在顶点 #6 / #2 上派发真实指针事件 → `POST /api/isochrone/polyline` 各 200、状态行「真实路网轨迹 · 48/45 个折点 · 懒加载 1/12 与 2/12」。这一轮**同时抓出一个只在 live 下才现形的缺陷**：`market` 提示原来只认 `data_source == "live"`，第二次跑同一社区时 POI 层报 `cache`、提示就悄悄消失了（见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.9）。逐条证据在 `docs/shots/README-isochrone-acceptance.md` |

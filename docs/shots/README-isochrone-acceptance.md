@@ -876,8 +876,18 @@ README §9.7、`web/app.css` 注释和测试 docstring 三处，本轮重算是 
   顺带抓到 README §10.4 两个手写计数漂移（45 例 → 实测 **54**、60 个 id → 实测 **62**），已改，见 TEST_REPORT §7.1。
 - **本轮没有起任何本地服务**：`netstat -ano | grep -E ':88[0-9][0-9].*LISTENING'` 只剩
   `127.0.0.1:8888`（pid 4708，上一会话遗留的无关进程，按「不杀不属于本轮的进程」留着）。
-- 🔴 **待回填**：修好后的那次 CI run 结论**还没读到**，本条不留占位数字——推送后按
-  `GET /repos/zys1101/CircleDoc/commits/<sha>/check-runs` 实测再写。
+- ✅ **回填（同日，`98b1478` = `98b1478115ac018ba658d53509e8bf0a9d0cb3aa`）**：
+  `GET /repos/zys1101/CircleDoc/actions/runs/38129396148/jobs` 实测三个 job 全 `completed / success`
+  （lint `114440383831` / test `114440384054` / build `114440445835`）。lint 的四个命令步逐条 success，
+  其中就是本轮改的 `静态页零公网外链（R12 / R13）`；`build` 不再是上一轮那个 `skipped`，
+  `构建镜像` → `断言镜像里没有 .db` → `断言镜像里没有真实 AK` → `零配置起容器并跑一次体检` 全 success。
+  ⚠️ API 给的时长（lint 17 s / test 20 s / 构建 18 s）短得不像真实构建，而作业日志这一层是 `403`
+  （公开仓库取 job logs 要 admin），所以这里**只登记步骤结论、不登记时长**；要看时长得开浏览器控制台权限。
+- 🔴 **同轮自查发现的另一条缺口（不是本轮修的）**：FR-205 的进度只到后端。
+  `grep -c 'task_id' web/report.js web/isochrone.js web/app.js` 实测 **0 / 0 / 0**，
+  `grep -n 'task_id' web/*.js` 无输出（`exit=1`）——前端从第一天就没调用过 `/api/analysis/{task_id}`，
+  状态行是 `web/report.js:1038` 的 `setInterval` 每秒走字。已在 README §10.7 / DESIGN §12 就地登记，
+  没有写成「已完成」。
 
 ## 未在真机验证清单（风险 R15 诚实登记）
 

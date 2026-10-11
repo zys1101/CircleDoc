@@ -1168,6 +1168,7 @@ mock 掉网络层，连发 20 个请求：
 
 | 项 | 原因 | 对本文哪一节有影响 |
 | --- | --- | --- |
+| 🔴 **FR-205 的进度只到后端** | 端点与真实阶段回调都在（`background: true` → `202` + `task_id`，`GET /api/analysis/{task_id}` 回真实 `progress`，`test_analysis_api.py` 断言过），但**前端一次都没调用**：`grep -n 'task_id' web/*.js` 实测 **0 命中**（三个 js 文件各自 `grep -c` 都是 0），体检走同步 `POST /api/analysis`，状态行由 `web/report.js:1038` 的 `setInterval` 每秒走字 | §3 的调用策略里「同步为一跳、异步要轮询」这条取舍（`api/analysis.py:19` 写明：切异步会给零配置演示多担一个轮询失败点）。文案本身不假造百分比，但 PRD FR-205 的「前端流式或轮询更新」**没有满足**，别按「进度已完成」读 |
 | ~~**`live` 模式端到端**~~ | ✅ **2026-10-10 已补验**（`docs/TEST_REPORT.md` §4.3） | §11 的推算模型已被一次真实实跑落在 PRD 目标内（14.6 ~ 16.1 s ≤ 25 s）；但 §2 `blocked` 判据与 §3 限流**仍只在 `MockTransport` 上验**——条款 3.2.3(ii) 禁压测，这一点不因「有了 AK」而改变 |
 | **`docker compose up`** | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → 三个接口可服务）；**compose 的起停与 bind mount 写权限仍未验** |
 | **真实测时 vs 插值推算的偏差统计** | live 每样只跑过一次，**样本量 1**，凑不出偏差分布 | §2.5 的精度取舍仍只能给机制说明。2026-10-10 补到**两条逐顶点真实对照**（`measured` 差 +6.7 %、`interpolated` 差 +32 %，见 `docs/TEST_REPORT.md` §5 第 4 条）：**两个样本不是分布**，且它顺带证明 `RouteMatrix` 与 `Direction` 对同一 O-D 本身就差 ≈7 % |

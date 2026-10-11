@@ -644,6 +644,19 @@ vendored，否则断网现场白屏」，白屏的成因是**下载期就要取�
 
 临时副本跑完即删。**没有放松检查**：正控制那一条就是防这个的。
 
+**改完之后的 CI 实测**（2026-10-11，`GET /repos/zys1101/CircleDoc/actions/runs/38129396148/jobs`，
+head sha `98b14781…`）：三个 job 全部 `completed / success`——
+
+| job | 结论 | 关键步骤结论（同一 API 的 `steps`） |
+| --- | --- | --- |
+| `lint（ruff + black + 密钥扫描）` | success | `ruff（零告警）` / `black（格式检查）` / `密钥扫描（FR-410…）` / **`静态页零公网外链（R12 / R13）`** 四步全 success |
+| `test（pytest，零 AK）` | success | `词表自检` / `合成样例基线校验` / `pytest` / `端到端冒烟` 全 success |
+| `build（Docker 镜像 + 无 .db 断言）` | success | 上一轮它是 `skipped`（被 lint 拦住），这次真的跑了：`构建镜像` → 两条镜像内断言 → `零配置起容器并跑一次体检` 全 success |
+
+⚠️ **只引用步骤结论，不引用时长**：同一份 API 给的时长是 lint 17 s / test 20 s / `构建镜像` 18 s，
+短得不像一次真实镜像构建，而作业日志这一层拿不到（`403`，见上）。所以「18 秒」不当证据写，
+能断言的只有**每一步的 `conclusion` 是 success**。
+
 ---
 
 ## 3. 对比实验：串行 `direction` vs 批量算路（FR-405）
