@@ -284,6 +284,12 @@ const state = {
   results: { walking: null, riding: null }, // FR-206：两模式结果都留着，用于叠加对比
   activeMode: "walking",
   activeResult: null,
+  // 🔴 本页最近一次请求的 `request_id`（页脚与「结果元信息」的兜底来源）。
+  // `/api/isochrone` 把号放在结果对象里，`/api/analysis` 放在响应**顶层**，嵌给地图的
+  // `isochrone` 子对象没有它；没有这一格，主路径（一键体检）刷完屏页脚就退回 `—`，
+  // 而且 `renderAll()` 会跑很多次，靠调用顺序去抢写是不可靠的（2026-10-11 就踩在
+  // `setOverlays()` 的第二次 `renderAll()` 上）。
+  requestId: "",
   lastPolylineResult: null,
   polylineCalls: 0,
   polylineSeq: 0, // FR-203 懒加载世代号：顶点连点时只认最新一次的响应（同 renderToken 的思路）
@@ -697,6 +703,11 @@ function renderModeBadge() {
   el.modeText.textContent = `数据模式：${label}${token}`;
 }
 
+/** 这份结果对应的 `request_id`：结果自带的最准，否则回落到本页最近一次请求的号。 */
+function currentRequestId(result) {
+  return String((result && result.request_id) || state.requestId || "");
+}
+
 function renderResultMeta(result) {
   clear(el.resultMeta);
   if (!result) {
@@ -704,6 +715,9 @@ function renderResultMeta(result) {
     return;
   }
   const center = pair(result.center) || state.center;
+  // 🔴 号本身不能只读 `result.request_id`：`/api/analysis` 把号放在响应顶层，嵌给地图的
+  // `isochrone` 子对象没有它，主路径（一键体检）刷完屏页脚就退回 `—`。见 `setRequestId()`。
+  const requestId = currentRequestId(result);
   const rows = [
     ["中心点（BD09LL）", `${num(center[0], 5)}, ${num(center[1], 5)}`],
     [
@@ -714,7 +728,7 @@ function renderResultMeta(result) {
     ["运行模式", DATA_MODE_LABEL[result.data_mode] || result.data_mode || "—"],
     ["圈内面积", result.area_km2 === null ? "—" : `${num(result.area_km2, 3)} km²`],
     ["顶点数", String(normalizeVertices(result).length)],
-    ["request_id", String(result.request_id || "—")],
+    ["request_id", requestId || "—"],
   ];
   if (result.degraded) {
     rows.push(["降级说明", `本次为降级结果：${result.message || "后端未给出原因"}`]);
@@ -722,7 +736,7 @@ function renderResultMeta(result) {
   for (const [key, value] of rows) {
     el.resultMeta.append(node("dt", null, key), node("dd", null, value));
   }
-  el.requestIdFoot.textContent = `request_id：${result.request_id || "—"}`;
+  el.requestIdFoot.textContent = `request_id：${requestId || "—"}`;
 }
 
 function renderUsage(result) {
@@ -2415,6 +2429,10 @@ async function runIsochrone(request) {
     });
     const body = await readJson(response);
     const requestId = body.request_id || (response.headers.get("X-Request-Id") || "");
+    // 这条路径也刷新「本页最近一次的号」：不刷的话，`state.requestId` 会一直停在上一份
+    // 体检报告的号上，而 `currentRequestId()` 的兜底就是拿它填页脚——报一个**过期**的号给
+    // 服务端日志比报 `—` 更糟。过期响应同样不许写（同 `runSeq` 那条规则）。
+    if (seq === state.runSeq) state.requestId = requestId;
     if (!response.ok || body.ok === false) {
       if (seq !== state.runSeq) {
         el.runHint.textContent = `过期请求（${MODE_LABEL[request.mode]}）未成功，已忽略：当前视图属于更新的一次分析。`;
@@ -3274,6 +3292,21 @@ window.CircleDocMap = {
   },
   setRunHint: (text) => {
     el.runHint.textContent = text;
+  },
+  /**
+   * 页脚与「结果元信息」的 `request_id` 兜底来源。🔴 必须有这个方法：`/api/analysis` 的信封号
+   * 在响应**顶层**，嵌给地图渲染的 `isochrone` 子对象里没有它（`as_dict()` 按 §4.7 出字段，
+   * 号由路由层补），而 `renderResultMeta()` 读的是「当前这份结果」的号。两者一错开，
+   * 跑「一键体检」这条主路径时页脚就永远停在 `request_id：—`——号子明明存在却看不见，
+   * 出问题时无法对着服务端日志报号。
+   *
+   * 存进 `state` 而不是直接写文本：`renderAll()` 在一次体检里要被 `adoptIsochrone` 与
+   * `setOverlays` 各调一次，谁最后跑谁定页脚，靠调用顺序赢不了。
+   * 2026-10-11 实测：同一页 `POST /api/isochrone` 能把号写进页脚，`POST /api/analysis` 不能。
+   */
+  setRequestId: (value) => {
+    state.requestId = String(value || "");
+    el.requestIdFoot.textContent = `request_id：${currentRequestId(state.activeResult) || "—"}`;
   },
   /** 供 `report.js` 定位到某个盲区块（FR-223 的「可点击定位到地图」）。 */
   focusOn: (lnglat) => {

@@ -9,9 +9,11 @@ CI 增一条无头冒烟（请求首页并断言关键 DOM 节点存在）」。
 所以本文件做四件事：
 
 1. **静态页可服务**：`/`、`/isochrone.html`、两个脚本、三个样式表全部 200。
-2. **零公网外链**（R12 / R13）：`<script src>` 与 `<link href>` 里不许出现任何
-   `http://` / `https://` / `//cdn` 形态的地址。百度 JSAPI 是**运行时动态注入**的，
-   不该出现在静态 HTML 里（那是 R13 要求的可降级形态）。
+2. **零公网外链**（R12 / R13）：**资源标签**（`script` / `link` / `img` / `iframe` …）的
+   `src` / `href` 里不许出现任何 `http://` / `https://` / `//cdn` 形态的地址。百度 JSAPI 是
+   **运行时动态注入**的，不该出现在静态 HTML 里（那是 R13 要求的可降级形态）。
+   页脚 `<a href="https://lbsyun…">` 是条款 7.3 要求的隐私政策链接，属导航而非加载，
+   不在禁止之列——但白名单只认那两个官方 URL，且必须带 `rel="noopener noreferrer"`。
 3. 🔴 **DOM 契约对账**：把两个脚本里 `getElementById` 取到的 id 全部抠出来，
    逐个断言在 `isochrone.html` 里存在。这条断言抓到的是「改了 HTML 忘了改 JS」
    这类只能靠肉眼发现的错误。
@@ -32,12 +34,13 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from infra.config import ROOT_DIR
+from infra.config import ROOT_DIR, Settings
 
 WEB = ROOT_DIR / "web"
 ISOCHRONE_HTML = WEB / "isochrone.html"
 REPORT_JS = WEB / "report.js"
 ISOCHRONE_JS = WEB / "isochrone.js"
+APP_CSS = WEB / "app.css"
 ISOCHRONE_CSS = WEB / "isochrone.css"
 REPORT_CSS = WEB / "report.css"
 INDEX_HTML = WEB / "index.html"
@@ -45,9 +48,19 @@ INDEX_HTML = WEB / "index.html"
 # 只匹配「取单个元素」的写法；`querySelector` 走 CSS 选择器，不在本断言的范围内。
 GET_BY_ID = re.compile(r"""getElementById\(\s*["']([^"']+)["']\s*\)""")
 HTML_ID = re.compile(r"""\bid=["']([^"']+)["']""")
+# 「零外链」（R12 / R13）针对的是**加载期就会发公网请求的资源**：`<script src>` / `<link href>` /
+# `<img src>` / `<iframe src>`。条款 7.3 要求页脚给隐私政策链接，那是 `<a href>`：用户点它才发
+# 请求，断网时页面渲染与它无关。所以匹配时要连**标签名**一起抓，只有资源标签算外链。
+ASSET_TAGS = {"script", "link", "img", "iframe", "source", "video", "audio", "embed", "object"}
+TAG_OPEN = re.compile(r"<(?P<tag>[a-zA-Z]+)\b(?P<attrs>[^>]*)>", re.IGNORECASE)
+TAG_ATTR = re.compile(r"""\b(?:src|href|srcset)=["'](?P<ref>[^"']+)["']""")
 # `src="..."` / `href="..."`：协议相对（`//host`）也要抓，它是 CDN 的常见写法。
-ASSET_REF = re.compile(r"""\b(?:src|href)=["']([^"']+)["']""")
 EXTERNAL = re.compile(r"^(?:https?:)?//", re.IGNORECASE)
+# 页脚唯一允许的两种外链形态：官方隐私政策与服务条款（2026-10-11 逐字读自 lbsyun.baidu.com）。
+OFFICIAL_POLICY_URLS = {
+    "https://lbsyun.baidu.com/index.php?title=openprivacy",
+    "https://lbsyun.baidu.com/index.php?title=open/law",
+}
 # FR-104 的勾选框行：`<input … />` 紧跟 `<span>文案</span>`。
 # 文案要与后端 `DIMENSIONS[key]["label"]` **逐字相同**，所以这里连文案一起抠出来对账。
 CAT_ROW = re.compile(r"""<input(?P<attrs>[^>]*?)/>\s*<span>(?P<label>[^<]+)</span>""")
@@ -77,6 +90,19 @@ def strip_html_comments(text: str) -> str:
     「零外链」这条断言会把说明文字判成违规，然后被人删掉 —— 那是把哨兵当噪音。
     """
     return HTML_COMMENT.sub("", text)
+
+
+def tag_refs(text: str) -> list[tuple[str, str, str]]:
+    """把开始标签解析成 `(标签名, 引用值, 整个开始标签)`。
+
+    比只匹配 `href="…"` 多带了两样东西：标签名（区分资源链接与导航链接）和整个开始标签
+    （`rel` 在 `href` 后面，只截到引用值就看不见它了）。
+    """
+    out = []
+    for tag in TAG_OPEN.finditer(text):
+        for attr in TAG_ATTR.finditer(tag["attrs"]):
+            out.append((tag["tag"].lower(), attr["ref"], tag.group(0)))
+    return out
 
 
 def strip_js_comments(text: str) -> str:
@@ -128,10 +154,22 @@ def test_home_page_exposes_the_key_dom_nodes(client: TestClient) -> None:
 # --------------------------------------------------------------------------------------
 @pytest.mark.parametrize("page", [INDEX_HTML, ISOCHRONE_HTML])
 def test_no_external_asset_references(page: Path) -> None:
-    text = strip_html_comments(page.read_text(encoding="utf-8"))
-    external = [ref for ref in ASSET_REF.findall(text) if EXTERNAL.match(ref.strip())]
-    # `data:,` 是空 favicon，本地相对路径都不是外链；出现 http(s) 或 // 就是违规。
-    assert external == [], f"{page.name} 引用了公网资源：{external}"
+    """R12：加载期的公网资源引用为 0；页脚的官方政策链接是**导航**，不是资源。
+
+    ⚠️ 这条从「任何 `href` 都不许是外链」放宽成「资源标签的引用不许是外链」，
+    放宽的代价是可能放过伪装成 `<a>` 的加载（`<a href>` 本身不会发请求，但 `<object>`、
+    `<iframe>` 会——那些都在 ASSET_TAGS 里）。为了不靠自觉，下面反向钉住：
+    页面上每一条外链必须是 `<a>`、必须命中 OFFICIAL_POLICY_URLS 白名单、必须带 `rel`。
+    """
+    refs = tag_refs(strip_html_comments(page.read_text(encoding="utf-8")))
+    assets = [ref for tag, ref, _ in refs if tag in ASSET_TAGS and EXTERNAL.match(ref.strip())]
+    # `data:,` 是空 favicon，本地相对路径都不是外链；资源标签出现 http(s) 或 // 就是违规。
+    assert assets == [], f"{page.name} 引用了公网资源：{assets}"
+    for tag, ref, opening in refs:
+        if not EXTERNAL.match(ref.strip()):
+            continue
+        assert tag == "a" and ref in OFFICIAL_POLICY_URLS, f"未登记外链 <{tag}> {ref}"
+        assert 'rel="noopener noreferrer"' in opening, f"{page.name} 的外链缺 rel：{opening}"
 
 
 def test_jsapi_is_not_hardcoded_in_static_html() -> None:
@@ -297,10 +335,67 @@ def test_export_declares_scope_and_provenance() -> None:
 
 
 def test_compliance_footer_is_present() -> None:
-    """FR-413：页脚要有数据来源与合规声明。"""
+    """FR-413：页脚要有数据来源与合规声明，条款 6.6 与 7.3 各有一条落在这里。"""
     text = ISOCHRONE_HTML.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
     assert "百度地图开放平台" in text
-    assert "不复制任何第三方内容" in text
+    assert "不含任何第三方原始记录" in text
+    # 条款 6.6：审图号与测绘资质是「不得删除、掩藏、修改或替换」的专有权利声明。
+    assert "GS(2025)4125" in text and "甲测资字11111342" in text
+    # 条款 7.3：隐私政策链接两页都要有（首页不渲染地图，但同样在用这些接口）。
+    privacy = "https://lbsyun.baidu.com/index.php?title=openprivacy"
+    assert privacy in text and privacy in index
+
+
+def test_compliance_footer_ttl_matches_config() -> None:
+    """页脚写死的三档 TTL 必须与 `Settings` 的**类默认值**同源，配置一改本页就红。
+
+    读 `model_fields[...].default` 而不是实例化 `Settings()`：后者会吃 `.env`，
+    本地把 `CACHE_TTL_ROUTE_S` 调成 1 天做调试，就会把「我的调试配置」判成合规声明写错。
+    """
+    fields = Settings.model_fields
+    place_h = fields["cache_ttl_place_s"].default // 3600
+    route_d = fields["cache_ttl_route_s"].default // 86400
+    geo_d = fields["cache_ttl_geocode_s"].default // 86400
+    assert fields["cache_ttl_regeo_s"].default // 86400 == geo_d, "页脚那句要求逆地理与地理编码同档"
+    text = ISOCHRONE_HTML.read_text(encoding="utf-8")
+    for phrase in (
+        f"地点数据 ≤ {place_h} 小时",
+        f"路线 ≤ {route_d} 天",
+        f"地理编码与逆地理 ≤ {geo_d} 天",
+    ):
+        assert phrase in text, f"页脚缺少或与配置不符的 TTL 表述：{phrase}"
+
+
+def wcag_ratio(fg: str, bg: str) -> float:
+    """两个 `#rrggbb` 的 WCAG 2.x 对比度。只服务于下面这条断言，不引第三方库。"""
+
+    def linear(value: str) -> float:
+        c = int(value, 16) / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    def luminance(color: str) -> float:
+        r, g, b = (linear(color[i : i + 2]) for i in (1, 3, 5))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    hi, lo = max(luminance(fg), luminance(bg)), min(luminance(fg), luminance(bg))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_footer_disclosure_passes_aa_contrast() -> None:
+    """条款 7.3 要的是「**显著**披露」：页脚那段 13 px 正文得过 AA 的 4.5:1。
+
+    换掉 `--muted` 的理由是**余量**而不是不过线：#6b7280 在纯白卡片上 4.83，看着一直安全，
+    坐到页面底色 #f6f7f9 上就只剩 4.51（距门槛 0.01），而 FR-413 / 6.6 / 7.3 的文字
+    恰好只有页脚这一个落点。#4b5563 在同一位置是 7.05。
+    🔴 反过来说这条断言**拦不住旧配色**（4.51 刚好过线），它拦的是以后有人把页脚换成更浅的灰。
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+    bg = re.search(r"--bg:\s*(#[0-9a-fA-F]{6})", css)
+    fg = re.search(r"\.page-foot\s*\{[^}]*?color:\s*(#[0-9a-fA-F]{6})", css, re.DOTALL)
+    assert bg and fg, "页脚配色不再是可解析的十六进制，这条断言失去比对对象"
+    ratio = wcag_ratio(fg[1], bg[1])
+    assert ratio >= 4.5, f"页脚 {fg[1]} 对 {bg[1]} 只有 {ratio:.2f}:1，13 px 不过 AA"
 
 
 # --------------------------------------------------------------------------------------
@@ -579,6 +674,36 @@ def test_report_opens_the_panel_it_just_filled() -> None:
     assert "isSheetMobile: () => isSheetMobile()," in code
     # Escape 收起与 `aria-expanded` 同步都靠 openSheet("") 这一条路径。
     assert "aria-expanded" in code and 'openSheet("")' in code
+
+
+def test_footer_request_id_survives_the_analysis_path() -> None:
+    """🔴 「一键体检」也要把 `request_id` 写进页脚（2026-10-11 实测到的缺陷形态）。
+
+    同一页两条路径行为不一致：`POST /api/isochrone` 能写（号就在结果对象里），
+    `POST /api/analysis` 不能——号在响应**顶层**，嵌给地图渲染的 `isochrone` 子对象没有它，
+    而 `renderResultMeta()` 读的是「当前这份结果」的号。主路径的页脚因此一直停在 `—`，
+    出问题时没法对着服务端日志报号。
+
+    修法必须是**存进 `state` 的兜底**，不是按调用顺序抢写文本：一次体检里 `renderAll()` 会被
+    `adoptIsochrone` 与 `setOverlays` 各调一次，第一版把 `setRequestId()` 放在两者中间，
+    实测页脚仍是 `—`（被后一轮重写）。另外交号要交在判 `ok` **之前**——失败时最需要号。
+    反过来 `/api/isochrone` 那条也必须**刷同一个 `state`**，否则兜底会停在上一份体检的号上：
+    报一个过期号给服务端日志比报 `—` 更糟。
+    """
+    report = strip_js_comments(REPORT_JS.read_text(encoding="utf-8"))
+    code = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    assert "function currentRequestId(result)" in code, "没有统一的取号入口"
+    assert "|| state.requestId ||" in code, "兜底没读 state，结果对象没号时仍是 —"
+    assert "const requestId = currentRequestId(result);" in code
+    assert 'state.requestId = String(value || "");' in code
+    assert 'request_id：${requestId || "—"}' in code, "页脚没走兜底"
+    assert (
+        "if (seq === state.runSeq) state.requestId = requestId;" in code
+    ), "等时圈路径没刷新 `state.requestId`，兜底会报上一份体检的过期号"
+    assert "window.CircleDocMap.setRequestId(payload.request_id" in report
+    handed = report.index("CircleDocMap.setRequestId")
+    checked = report.index("!response.ok || payload.ok === false")
+    assert handed < checked, "失败分支没交号：出错时最需要对上服务端日志"
 
 
 # --------------------------------------------------------------------------------------

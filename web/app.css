@@ -206,20 +206,42 @@ button:disabled {
   font-size: 13px;
 }
 
+/* FR-413 页脚：链接一行 + 合规声明一到两行。`display:flex` 挂在 `.foot-links` 上而不是
+   `.page-foot` 上——声明段落在同一个 flex 容器里会被拉成横向并排的三块。
+   颜色不用 `--muted`：#6b7280 坐在页面底色 #f6f7f9 上是 4.51:1，距 AA 的 4.5 只剩 0.01，
+   而这段是条款 7.3 要的「显著披露」，不该卡在这种余量上。#4b5563 在同一位置实测 7.05:1。 */
 .page-foot {
+  margin-top: 14px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.page-foot p {
+  margin: 6px 0;
+}
+
+.foot-links {
   display: flex;
   gap: 14px;
   align-items: baseline;
   flex-wrap: wrap;
-  margin-top: 14px;
-  color: var(--muted);
-  font-size: 13px;
+  margin: 0;
 }
 
 .page-foot a {
   color: var(--fg);
   text-decoration: none;
   border-bottom: 1px solid var(--line);
+}
+
+/* 审图号是「不得删除、掩藏」的专有权利声明（条款 6.6）：用正文色而不是页脚色，
+   读取日期说明这串号码有多新，号码本身不该被淡化。 */
+.foot-review {
+  color: var(--fg);
+}
+
+.foot-read {
+  font-style: italic;
 }
 
 @media (max-width: 480px) {

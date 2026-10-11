@@ -5,7 +5,7 @@
 | 文档定位 | PRD §9 交付物「对比测试报告」；对应 FR-405、FR-406、§6.1、§6.2 |
 | 最后更新 | 2026-10-11 |
 | 测试命令 | `pytest -q`（零配置、零 AK、零真实出网） |
-| 结论 | **498 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
+| 结论 | **501 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
 
 ---
 
@@ -14,7 +14,7 @@
 **2026-10-10 起本项目已接入真实百度 AK**（服务端 + 浏览器端两类，配在 gitignored 的 `.env` 里）。
 所以这份报告现在有两类证据，**口径不同、不互相顶替**：
 
-* **`mock` 侧**：498 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
+* **`mock` 侧**：501 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
   也是本文 §1、§2、§3、§5 的主口径。
 * **`live` 侧**：§4.3 是一次**真实出网**的端到端实跑（三样例各一次），§6 的「JSAPI 实底图顶点点击」
   是另一次真实浏览器 + 真实出网的补验。§2.6 ~ §2.9 四个缺陷**只有在 live 下才暴露**——
@@ -46,14 +46,15 @@
 | `test_isochrone_api.py` | 26 | `/api/isochrone` 全形状、降级、polyline 12 次硬上限 | FR-201、FR-203、FR-403 |
 | `test_geo_api.py` | 27 | **`/api/regeo` 与 `/api/geocode` 的接口级用例（上一轮新增，此前一条都没有）**：§4.7 出参**平铺在顶层**、字段只来自 `addressComponent`（用一份「文本里像有区、组件里没给」的报文反证不切文本）、`location` 纬度在前而响应 `lnglat` 经度在前、同坐标第二次**命中缓存且 0 次出网**、空 results 留在 `live` 层不退合成、mock 态无 `formatted_address` 键、四类非法 `lnglat` 与境外坐标 400 且指名字段、信封带 `request_id` 且不泄 AK。<br>**本轮 +11 例 `/api/suggest`（FR-108）**：默认关闭时 `degraded_reason = suggest_disabled` 且 `transport.calls == []`（**根本没发请求**，比 200 更能证明没烧配额）、`.env` 里的 `SUGGEST_ENABLED=true` 真能到达服务（§2.13）、候选只留「有坐标且在国内」的两条并计数 `total/dropped`、按 **place 桶**计量、缺 `region` 与 < 3 字各自 400 且指名字段、空列表是**结论**而不是错误、同词第二次走缓存 0 出网、**关掉开关后已有缓存仍可读** | FR-103、FR-108、FR-101、§4.7、R1′、R8、FR-403 |
 | `test_analysis_api.py` | 46 | `/api/analysis` 报告形状、任务轮询、后台模式、`/api/poi` 七维度、错误信封、**真实检索盲区偏大提示（`live` 与 `cache` 两态各断言一次 + `sample` 反向断言）**、**FR-104 类别子集：伤及盲区主判定的 7 种勾选组合逐一断言 + 总分分母随子集收缩** | §4.7、FR-205、FR-404、§4.4、§2.9、FR-104 |
-| `test_web_smoke.py` | 51 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线、**FR-106 抽屉的把手条 ↔ 面板对账 / 断点唯一真值 / 无 JS 降级 / 44 px 规则 / 地图高度口径**、**FR-107 档位来源（`?profile=` 优先于视口探测）与简化模式徽标取自响应 `meta`**、**FR-103 地址行的接线（`setCenter` 里必须真的调用、且不 `await`）/ 三条配额守卫齐全 / 地址字段无 `split` 无 `toFixed` / 四个状态都用 `data-state`**。<br>**本轮 +6 例 FR-108**：开关在 HTML 里**没有** `checked` 且关着时走 `closeSuggest()` 而不是 `fetch(`、前后端 `SUGGEST_MIN_KEYWORD_LEN` 逐字相等且按码点数、缓存键带城市 + 在飞去重 + 世代号三条守卫齐全、候选只渲染 `body.items` 且每行都能落点（`flyTo` 缺方法时退回 `panTo`）、键盘四键不吞掉手工地理编码、七个态的样式与 `aria-expanded` 同源且候选行 44 px | R11、R12、R13、FR-213、FR-104、FR-106、FR-107、FR-103、FR-108 |
+| `test_web_smoke.py` | 54 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线、**FR-106 抽屉的把手条 ↔ 面板对账 / 断点唯一真值 / 无 JS 降级 / 44 px 规则 / 地图高度口径**、**FR-107 档位来源（`?profile=` 优先于视口探测）与简化模式徽标取自响应 `meta`**、**FR-103 地址行的接线（`setCenter` 里必须真的调用、且不 `await`）/ 三条配额守卫齐全 / 地址字段无 `split` 无 `toFixed` / 四个状态都用 `data-state`**、**FR-108 开关默认关 + 前后端门槛逐字相等 + 世代号/缓存键/在飞去重**。<br>**本轮 +3 例 FR-413**：外链反向钉死（资源标签零外链 **且** `<a>` 只允许官方那两个 URL 带 `rel="noopener noreferrer"`，把「哨兵按标签收窄」这件事本身钉住，防止它变成后门）、**页脚 TTL 三个数字对着 `Settings.model_fields` 的类默认值逐项比对**（改配置不改页脚就红）、**页脚正文对页面底色的 WCAG 对比度在测试里重算**（4.5:1 硬线）、**一键体检路径的 `request_id` 交接**（见 §2.15） | R11、R12、R13、FR-213、FR-104、FR-106、FR-107、FR-103、FR-108、FR-413、条款 3.3.4 / 6.6 / 7.3 |
 | `test_samples_baseline.py` | 16 | 三样例一致性、三型差异方向、基线不漂 | FR-102、FR-412、§6.1 |
 | `test_coord_param_table.py` | 13 | 接口 × 坐标参数名 × 坐标顺序常量表 | FR-406、R8 |
 | `test_health_contract.py` | 11 | `/api/health` 三个「数据模式」字段的位置与值域、零配置横幅、AK 不外泄 | §4.6、FR-404、FR-410 |
 | `test_cache_store_singleton.py` | 4 | 缓存单例口径唯一 | FR-402 |
-| **合计** | **498** | | |
+| **合计** | **501** | | |
 
-耗时：**4.83 ~ 5.10 s**（同一轮 498 例，本机连续五次实测，2026-10-11；`chrome-devtools` 与 node MCP 全程在线）。
+耗时：**5.33 ~ 5.40 s**（同一轮 501 例，本机对**最终代码状态**连续五次实测，
+5.33 / 5.35 / 5.40 / 5.34 / 5.35 s，全 `exit=0`；`chrome-devtools` 与 node MCP 全程在线）。
 上一轮记录的 8.94 / 11.55 s **不是代码回归**而是后台负载：那次 `chrome-devtools` 浏览器与它的 node MCP 服务都在跑，
 纯 CPU 基准 `sum(range(10**7))` 同时段实测 0.644 s（正常量级的两倍），最慢单例
 `test_task_registry_is_bounded` 也从 0.68 s 涨到 1.9 ~ 2.3 s。本轮五次测量时浏览器 MCP
@@ -86,7 +87,7 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 
 ---
 
-## 2. 开发过程中发现并修复的十四个真实缺陷
+## 2. 开发过程中发现并修复的十六个真实缺陷
 
 十二份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
 「把 CI 脚本真的执行一遍」「在最小 DOM 打桩下真跑一遍绘制路径」
@@ -97,6 +98,9 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 §2.10 是**在真实浏览器里点出来的**：`node --check` 与 451 例单测全绿，全选态的提示文案
 却仍然写错，因为那条分支只有真人打开页面才会看到。
 §2.11 更难看一档：那一轮**写在文档里的冒烟数字本身是假的**，`node --check` 拦不住、单测也拦不住。
+§2.15 与 §2.10 / §2.11 是同一族：**501 例全绿、`ruff` / `black` 全绿、`node --check` 全绿，
+页脚上那串 `—` 照样是错的**。它踩的是「两条路径共用一个渲染函数，而两条路径的信封形状不一样」。
+§2.16 踩的还是老坑：**一个我自己在上一轮算错、并抄进三处文档的对比度数字**（写的 4.49，真值 4.51）。
 
 ### 2.1 `services/poi_search.py`：7 处协程未 `await`（会导致接口 500）
 
@@ -510,6 +514,83 @@ if (value !== "none") el.suggestList.scrollIntoView({ block: "nearest" });
 `static` 定位的下拉列表落在哪个滚动容器里，决定它到底可不可见；
 `tests/test_web_smoke.py` 里那句 `scrollIntoView({ block: "nearest" })` 断言就是钉住这一点的。
 
+### 2.15 🔴 一键体检把 `request_id` 整个丢了：一个渲染函数服务两种信封形状（已修）
+
+FR-413 的页脚要在现场对服务端日志报号，而实测**主路径报不出来**：`POST /api/isochrone` 那条能显示，
+`POST /api/analysis`（页面上「一键体检」就是它）跑完页脚一直停在 `request_id：—`，
+「结果元信息」里那一行同样空。号拿不到 = 出问题时用户只能说「我按了体检」，日志里几十条号没法指认。
+
+根因不是前端读错字段，而是**两条路径的信封形状不同**（本轮在 `127.0.0.1:8804` 的 mock 服务上实测，
+`x-http-requests: 0` 全程零出网）：
+
+* 顶层键：`ok, meta, isochrone, isochrones, coverage, blind_spots, score, summary, usage, assertions,
+  notes, task_id, request_id` —— **`request_id` 在顶层**，且响应头 `x-request-id` 同值。
+* 交给地图渲染的 `isochrone` 子对象 19 个键里**没有** `request_id`（`'request_id' in payload.isochrone` → `False`）。
+* 旧代码 `git show HEAD:web/isochrone.js` 第 717 / 725 行读的就是 `result.request_id`，
+  那条路径上 `result` 永远是那个没有号的子对象。
+
+**第一版修法是错的，而且是跑过之后才知道错的。** 把 `setRequestId()` 放在 `adoptIsochrone()` 之后
+（按调用顺序抢写页脚文本），实测页脚**仍是 `—`**：一次体检里 `renderAll()` 会被 `adoptIsochrone`
+与 `setOverlays` **各调一次**，后一轮把文本重写回去了。
+
+修法因此换成**状态兜底**而不是顺序依赖：号存进 `state.requestId`，取号统一走
+`currentRequestId(result)`（结果自带优先，否则回落到本页最近一次请求的号），页脚与「结果元信息」
+那一行都读它；`report.js` 的交号动作放在 `readJson` 之后、**判 `ok` 之前**——失败时最需要号，
+排在 `if (!response.ok …) return` 后面就等于失败路径上一条也交不出去。
+
+🔴 存进 `state` 随即引入**第二个风险**：兜底可能报一个**过期**的号（对不上服务端日志里这一次请求，
+比报 `—` 更糟）。所以 `/api/isochrone` 那条路径也必须刷同一个格子，且**过期响应不许刷**
+（沿用 `runSeq` 的世代判定，与「过期结果不抢视图」同一条规则）。三条真按钮序列实测：
+「开始分析」`9034cf7e71fe4942` → 「一键体检」`4334bb27c8c04fe3` → 再「开始分析」**`cc527b798c894024`**
+（没有停在上一份体检的号上，`dt=request_id` 同值），全程 `reqid=200/201/202` 全在 `127.0.0.1`。
+
+三步 A/B/C 复现（同一份响应，`request_id = 14e8a8fd085b4924`）：
+
+| 步 | 操作 | 页脚 |
+| --- | --- | --- |
+| A | `setRequestId("")` → `adoptIsochrone(payload.isochrone, {force:true})` | `request_id：—`（**旧行为复现**） |
+| B | `setRequestId(payload.request_id)` | `request_id：14e8a8fd085b4924` |
+| C | `setOverlays(...)`（触发第二次 `renderAll()`） | 仍是 `14e8a8fd085b4924`（**不再被重写**） |
+
+真实 UI 复测两条路径都带上号：桌面 1280×800 点「一键体检」→ 页脚 `dfe369002be847a6`、
+「结果元信息」`dt=request_id` 那行同值；移动 375×667×3 → 页脚 `d398a2bfe9fc44d7`、dl 行同值。
+守卫是 `test_footer_request_id_survives_the_analysis_path`，它钉的是**行为**
+（兜底必须读 `state.requestId`、交号必须在判 `ok` 之前），不是调用顺序——
+钉顺序的那版断言在 C 步之前也会全绿，正是它的失败方式。
+
+### 2.16 页脚对比度：上一轮我算错的 4.49，真值 4.51 —— 以及它顺手盖住的那笔欠债（已修）
+
+这一条有两个错，第二个更难看。
+
+**第一个是判断错。** FR-413 落地时页脚正文沿用了 `--muted`（#6b7280）。先确认比对对象没选错：
+浏览器里 `.foot-legal` 的 computed 值是 `color rgb(75,85,99)`、**向上第一个非透明背景
+`rgb(246,247,249)`**（正是 `--bg`）、`font-size 13px`，所以「页脚坐在页面底色上、13 px 正文、
+AA 硬线 4.5」这套前提是对的。错的是算术：上一轮写进 README / `web/app.css` 注释 /
+测试 docstring 三处的 **4.49:1 是手算失误**，用仓库自己的 `wcag_ratio()` 重算得 **4.51**，
+即**刚好过线 0.01**而不是「差 0.01 不过」。三处已同步改成真值。
+
+**第二个才是真问题**：4.51 这种余量对一段「条款 7.3 要求的显著披露」是不够的，因为它取决于底色。
+把同一支 `--muted` 摆到本项目调色板里**五个真实底色**上逐个量：
+
+| 底色 | 变量 | `--muted` #6b7280 | 页脚现用 #4b5563 |
+| --- | --- | ---: | ---: |
+| `#ffffff` | `--card` | 4.83 | 7.56 |
+| `#fff7e6` | `--warn-bg` | 4.54 | 7.09 |
+| `#f6f7f9` | `--bg`（页脚实际所在） | **4.51** | **7.05** |
+| `#eaf6f0` | `--ok-bg` | 🔴 **4.36** | 6.82 |
+| `#e3e6ec` | `--line` | 🔴 **3.87** | 6.05 |
+
+两个直接不过线，最紧的一个只剩 0.01。`--muted` 的语义是「次要文字」，而合规披露不是次要文字——
+借用它是类别错误，底色一挪就掉线。改成页脚专用的 `#4b5563` 后五个底色全过（6.05 ~ 7.56）。
+
+🔴 **诚实标注这条守卫的能力边界**：`test_footer_disclosure_passes_aa_contrast` 断言 `ratio >= 4.5`，
+而旧配色是 4.51 —— **这条断言拦不住旧配色**，它拦的是以后有人把页脚换成更浅的灰。
+所以表格里那五个数字是这条改动的真正依据，测试只是防止回退。
+
+**顺带记一笔同族的第三个错**：本轮第一次跑 `black --check tests/` 就是 `exit=1`
+（`test_web_smoke.py` 一处 `'...'` 该写成 `"..."`），而上一轮文档里登记的是「black 全绿」——
+说明那次跑的不是最终文件状态。改成 double-quote 后 `17 files would be left unchanged`、`exit=0`。
+
 ---
 
 ## 3. 对比实验：串行 `direction` vs 批量算路（FR-405）
@@ -813,6 +894,8 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 | 移动端**真机**行为 | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
 | 浏览器内真实渲染 | 本环境的无头 Chrome 无输出（被沙箱挡住） | 改用 Node + 最小 DOM 打桩真跑 `web/report.js` 与 `web/isochrone.js` 的**绘制路径**（`tools/report_dom_smoke.mjs` **15 项** + `tools/map_layers_smoke.mjs` **12 项**，`grep -c 'OK '` 实测；此前本文写 17、README/DESIGN 写 12，三处都对不上脚本真实输出，已统一），但它**不是**真实浏览器 |
 | 前端截图（**能拍、但不入库**） | 2026-10-10 起 chrome-devtools 通道能截图（实时底图与橙色真实路网线已现场目视确认） | **仍不提供 PNG**：截图必然含百度瓦片与版权条，把第三方地图影像固化进开源仓库是另一回事；本文件继续以 DOM 计数、network、状态行/tooltip 原文作证据 |
+| 🔴 **FR-305 的报告图片（PNG）导出未实现，且「能不能拍到实时底图」这件事本身没实测** | 现在只有 `exportJson` / `exportCsv` / `exportBlindCsv` 三条出口（`web/report.js:816 / 912 / 857）。已核的是**我方图表是矢量**：雷达与柱状图由 `report.js:130` 的 `svgNode()`（`document.createElementNS`）建出来，克隆 SVG 走 `data URL → Image → canvas → toDataURL()` 不引入跨域。**没核的是另一半**：JSAPI 把瓦片画进自己的 `<canvas>`、图源跨域且无 CORS 头，`toDataURL()` 按规范应抛 `SecurityError`——**这条只有代码依据，没有实测**，要验就得在有真实 `BAIDU_BROWSER_AK` 的机器上打开 live 底图再调一次，那次页面加载要烧 JSAPI 浏览器端配额，按纪律等点头 | PNG 导出的设计口径先按结论收口：**做「矢量报告卡 + 版权/审图号文字带」，不承诺拍到在线瓦片**（条款 6.6 要的是导出品里**保留标识**，不是导出品**必须是那张底图**）。`静态图` API 作为备选同样返回跨域位图，绕不开这个判定 |
+| 🔴 **页脚审图号字符串没有可自动核对的来源** | `GS(2025)4125` / `甲测资字11111342` 是 2026-10-11 从 `lbsyun.baidu.com` 首页页脚的文本节点**实读**的（不是记忆），TTL 那三个数字有 `test_compliance_footer_ttl_matches_config` 对着 `Settings.model_fields` 默认值守着，**审图号没有对应的机器可读真值** | 自动化只能验「这一行在不在」，验不了「这一行还是不是官方那个号」。页脚因此带**读取日期**，并把**季度人工复核**登记为唯一兜底（README §10.7 / §9.7） |
 
 ---
 
@@ -859,20 +942,22 @@ CI 本来就没有 `.env`，这条改动对它无感；2026-10-10 复跑 `m1` 35
 复现命令与实测值（**2026-10-11 再次全部重跑**，右两列分别是本轮值与上一轮登记的旧值。
 这张表已经连着四轮抓到东西：第一轮三处漂移、FR-106 那轮四处、FR-107 那轮 `report.js` 与
 `test_web_smoke.py` 各 +1；FR-103 那轮动了前端，`isochrone.js` 与 `test_web_smoke.py`
-各 +1，另新增一行 `test_geo_api.py`；本轮 FR-108 又同时动了前端与接口层，
+各 +1，另新增一行 `test_geo_api.py`；FR-108 那轮又同时动了前端与接口层，
 `isochrone.js` +2、两个测试文件 +6 / +11 —— 这些都是**真实增长**不是漂移，
-但只有重跑命令才分得清）：
+但只有重跑命令才分得清。**FR-413 这轮抓到的是另一种东西**：三个 DOM 计数一个没变（26 / 62 / 96），
+`test_web_smoke.py` +3，可是**上一轮写进文档的两个数字本身是错的**——页脚对比度 4.49（真值 4.51，
+见 §2.16）与「black 全绿」（本轮首跑 `black --check tests/` 是 `exit=1`）：
 
 | 数字 | 复核命令 | 实测 | 此前文档写的 |
 | --- | --- | --- | --- |
-| `report.js` 取的 DOM 节点数 | `grep -o 'getElementById("[^"]*"' web/report.js \| sed 's/.*("\(.*\)"/\1/' \| sort -u \| wc -l` | **26**（本轮未动） | 24 → 25 → **26**（FR-107 新增 `#profile-badge`，README §10.4 / 本文 §1.1 / DESIGN §10 / 两个脚本的注释都曾手写 24） |
+| `report.js` 取的 DOM 节点数 | `grep -o 'getElementById("[^"]*"' web/report.js \| sed 's/.*("\(.*\)"/\1/' \| sort -u \| wc -l` | **26**（本轮未动） | 24 → 25 → **26**（FR-107 新增 `#profile-badge`，README §10.4 / 本文 §1.1 / DESIGN §10 / 两个脚本的注释都曾手写 24）。FR-413 复用了已有的 `#request-id-foot`，三个数（26 / 62 / 96）**本轮复测全部不变** |
 | `isochrone.js` 取的 DOM 节点数 | 同上换成 `web/isochrone.js` | **62** | 58 → 59（FR-106 新增 `#sheet-bar` 及其三个 tab）→ 60（FR-103 新增 `#center-address`）→ **62**（FR-108 新增 `#suggest-on` 开关与 `#suggest-list` 候选列表；`web/isochrone.html` 的 `id=` 去重后同步到 **96**） |
 | `report_dom_smoke.mjs` 断言条数 | `node tools/report_dom_smoke.mjs \| grep -c 'OK '` | **15**，`exit=0` | 本文写 17、README/DESIGN 写 12 |
-| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12**，`exit=0`（本轮为 FR-108 改过 `isochrone.js` 后重新生成桩输入复跑，96 784 字节） | 上一轮也写 12 —— 但**那个 12 是抄的**，同一提交上这条脚本崩了、`grep -c` 实返 `0`，见 §2.11 |
-| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **51** | 27 → 18（README §10.4 曾写）→ FR-104 补到 31 → FR-106 补到 39 → FR-107 补到 41 → FR-103 补到 45 → **FR-108 补到 51** |
-| `test_geo_api.py` 例数 | `pytest -q --collect-only tests/test_geo_api.py` | **27** | 上一轮新增文件（16 例）→ **本轮 +11 例 `/api/suggest`**：`/api/suggest` 此前同样**没有任何接口级用例**，只在启动探测里被间接触碰 |
+| `map_layers_smoke.mjs` 断言条数 | `node tools/map_layers_smoke.mjs _map_input.json \| grep -c 'OK '` | **12**，`exit=0`（桩输入按本文 §7 第 5b 条那条命令重新生成：**96 784** 字节。本轮早些时候还用另一个中心点生成过一份 **57 901** 字节的桩输入，同一套断言同样 12 项 `exit=0`——**字节数随请求变，断言数不变**，别把文件大小当成回归信号） | 上一轮也写 12 —— 但**那个 12 是抄的**，同一提交上这条脚本崩了、`grep -c` 实返 `0`，见 §2.11 |
+| `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **54**（`54 tests collected in 0.36s`） | 27 → 18（README §10.4 曾写）→ FR-104 补到 31 → FR-106 补到 39 → FR-107 补到 41 → FR-103 补到 45 → FR-108 补到 51 → **FR-413 新增 3 例（页脚 TTL 对账 / 对比度重算 / `request_id` 交接）到 54**；同轮的「零公网外链」是**改写不是新增**——哨兵按标签收窄成「只拦资源标签」，同时补了一条反向钉死（`<a>` 只允许官方那两个 URL 且必须带 `rel`），改写后条数不变 |
+| `test_geo_api.py` 例数 | `pytest -q --collect-only tests/test_geo_api.py` | **27**（本轮未动，复测确认） | FR-103 那轮新增文件（16 例）→ **FR-108 那轮 +11 例 `/api/suggest`**：`/api/suggest` 此前同样**没有任何接口级用例**，只在启动探测里被间接触碰 |
 | `test_health_contract.py` 例数 | 同上换成该文件 | **11** | 本文 §1 表写 10（一轮重算合计时暴露，已就地改成 11） |
-| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **498**（`exit=0`） | 451 → FR-106 后 459 → FR-107 补 2 例到 461 → FR-103 补 20 例（16 + 4）到 481 → **FR-108 补 17 例（11 + 6）到 498** |
+| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **501**（对最终代码状态连续五次 `exit=0`，5.33 / 5.35 / 5.40 / 5.34 / 5.35 s） | 451 → FR-106 后 459 → FR-107 补 2 例到 461 → FR-103 补 20 例（16 + 4）到 481 → FR-108 补 17 例（11 + 6）到 498 → **FR-413 新增 3 例到 501** |
 
 **本轮新增的纪律：复核命令要连着看退出码。** `grep -c 'OK '` 在崩溃的输出上照样返回一个数（`0`），
 只比对计数分不清「跑绿了」和「跑都没跑」——§2.11 那条假数字就是这么来的。

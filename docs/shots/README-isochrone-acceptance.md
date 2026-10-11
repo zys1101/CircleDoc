@@ -705,6 +705,149 @@ PRD FR-108 原文：「地址输入框支持中文搜索联想，走 `/api/sugge
   为 FR-108 改过 `isochrone.js` 后复跑 `map_layers_smoke` 而生成，12 项 `exit=0`）。
 - chrome-devtools 设备模拟：本轮从 `1540x732x1` → `375x667x3,mobile,touch` → 回到 `1280x800x1`。
 
+## FR-413 合规页脚 · 零出网实测（2026-10-11，实现人自验）
+
+PRD FR-413（**P0**）要求页脚同时落三件事：缓存性质与 TTL 声明（条款 3.3.4）、合成示例数据说明、
+**百度版权与审图号**（条款 6.6）+ **显著披露与隐私政策链接**（条款 7.3）。
+这一轮验的是**页面上真长出这三行了**，以及两串写死的官方字符分别会怎么过期。
+
+### 0. 前提与零出网自证
+
+- 服务：`BAIDU_SERVER_AK= BAIDU_BROWSER_AK= ./.venv/Scripts/python.exe -m uvicorn api.app:app --port 8804`
+  （两个 AK 用**空环境变量**压住，`.env` 里那对真实 AK 优先级低于显式环境变量）。
+  ⚠️ 别被任务管理器骗到：`Win32_Process` 对这条进程报的是 `D:\Anaconda\python.exe`——
+  `.venv` 是从 Anaconda 的 3.11.4 建的（`pyvenv.cfg` 里 `home = D:\Anaconda`、
+  `include-system-site-packages = false`），Windows 的 venv 启动器会把**宿主**二进制路径写进进程表，
+  而 `sys.prefix` 仍是 `.venv`。所以「门禁要用 `.venv`、直接敲 `pytest` 会撞到 Anaconda 那边没装
+  `fastapi`」那条口径依然成立，只是排查进程时不能只看 `ExecutablePath`。
+- `GET /api/health` 本轮复测：`status=offline`、`ok=true`、`data_mode=mock`、`baidu_reachable=false`、
+  `server_ak_type=not_configured`、`browser_ak_type=not_configured`、`services_enabled` **6/6 全 false**。
+- 后端一条 `POST /api/analysis`（`{"lnglat":[116.407,39.904],"mode":"walking","minutes":15}`）：
+  HTTP **200**、`x-request-id: f51daf48676a4795`、`x-http-requests: 0`、`x-place-calls: 0`、
+  `usage.elapsed_ms=15`、`usage.http_requests=0`、`usage.place_calls=0`。
+- 🔴 **这一节里唯一碰真实网络的是 §4**（百度官方公开文档页），它不调用任何带 AK 的接口、不占配额；
+  页面渲染与 `request_id` 那几条全部在 8804 的 mock 服务上跑。
+
+### 1. 页脚三行的几何（桌面 1280×800 / 移动 375×667×3）
+
+| 量 | 桌面 `data-sheet-mode=desktop` | 移动 `data-sheet-mode=mobile` |
+| --- | ---: | ---: |
+| `.page-foot` 尺寸 | **1265 × 126** px | **375 × 366** px |
+| `.foot-links` / `.foot-legal` / `.foot-review` 段高 | 22 / 42 / 21 | 137 / 146 / 42 |
+| 五条 `<a>` 热区高 | 22 px ×5 | **44 px ×5**（FR-106 的 44 px 规则覆盖到页脚） |
+| `.stage-area` | 三栏同屏，不走抽屉 | **331 × 337** |
+| `documentElement.scrollWidth - innerWidth` | **−15**（无横向滚动） | **0** |
+
+移动那张表里段高从 22/42/21 涨到 137/146/42 是**预期**而不是缺陷：375 宽下每条链接独占 44 px 行高、
+两段声明按字换行。代价是页脚本身占到 366 px（视口的 55 %），所以它必须留在抽屉**外面**——
+`.stage-area` 由 JS 量「视口 − stage-area 上边界 − 把手条」，本轮实测 331×337 说明地图没被页脚挤掉。
+
+### 2. 对比度：`--muted` 的 0.01 余量（改前 4.51，改后 7.05）
+
+先确认比对对象不是猜的，浏览器里 `.foot-legal` 的 computed 值：
+
+```
+color      rgb(75, 85, 99)   → #4b5563（改后）
+向上第一个非透明背景 rgb(246, 247, 249) → #f6f7f9 = `--bg`
+font-size  13px              → AA 正常字号，硬线 4.5:1
+```
+
+再用仓库自己的 `wcag_ratio()`（`tests/test_web_smoke.py`）对**本项目调色板的五个真实底色**逐个量：
+
+| 底色 | 变量 | `--muted` #6b7280 | 页脚现用 #4b5563 |
+| --- | --- | ---: | ---: |
+| `#ffffff` | `--card` | 4.83 | 7.56 |
+| `#fff7e6` | `--warn-bg` | 4.54 | 7.09 |
+| `#f6f7f9` | `--bg`（页脚实际所在） | **4.51** | **7.05** |
+| `#eaf6f0` | `--ok-bg` | 🔴 **4.36** 不过线 | 6.82 |
+| `#e3e6ec` | `--line` | 🔴 **3.87** 不过线 | 6.05 |
+
+🔴 **诚实记录一个我自己的错**：上一轮我把「#6b7280 对 #f6f7f9」写成 **4.49:1** 并抄进了
+README §9.7、`web/app.css` 注释和测试 docstring 三处，本轮重算是 **4.51**——
+也就是**刚好过线 0.01**，不是「差 0.01 不过」。三处已改成真值，
+`docs/TEST_REPORT.md` §2.16 记了这件事。顺带说明**这条测试拦不住旧配色**（4.51 ≥ 4.5 会照样绿），
+它拦的是以后换成更浅的灰；真正支撑这次改动的是上面那张五底色表。
+
+### 3. `request_id`：一次体检里页脚从 `—` 变成号（§2.15 的现场复现）
+
+信封形状实测（同一条 mock 响应）：顶层 13 个键里**有** `request_id`，
+嵌给地图的 `isochrone` 子对象 19 个键里**没有**（`'request_id' in payload.isochrone` → `false`）。
+旧代码 `git show HEAD:web/isochrone.js` 第 717 / 725 行只读 `result.request_id`，
+所以主路径必然空。三步 A/B/C 在同一个页面、同一份响应上复现并验证（`request_id = 14e8a8fd085b4924`）：
+
+| 步 | 操作 | 页脚 `#request-id-foot` |
+| --- | --- | --- |
+| A | `setRequestId("")` → `adoptIsochrone(payload.isochrone, {force:true})` | `request_id：—` ← **旧行为** |
+| B | `setRequestId(payload.request_id)`（与响应头 `x-request-id` 同值） | `request_id：14e8a8fd085b4924` |
+| C | `setOverlays(...)` 触发**第二次** `renderAll()` | 仍是 `14e8a8fd085b4924` ← 兜底生效，不再被重写 |
+
+真实 UI（点「一键体检」按钮，不是打桩）两档各跑一次，页脚与「结果元信息」`dt=request_id` 那行**同值**：
+
+- 桌面 1280×800：`request_id：dfe369002be847a6`
+- 移动 375×667×3：`request_id：d398a2bfe9fc44d7`
+
+⚠️ 第一版修法是**把 `setRequestId()` 放在 `adoptIsochrone` 之后**，实测页脚仍然 `—`——
+一次体检会跑两轮 `renderAll()`（`adoptIsochrone` 与 `setOverlays` 各一轮），靠调用顺序抢写文本不可靠。
+最终修法是把号存进 `state.requestId`、取号统一走 `currentRequestId(result)`。
+
+存进 `state` 就带来一个新风险：**兜底可能报一个过期的号**（比报 `—` 更糟，它对不上服务端日志里
+这一次请求）。所以 `/api/isochrone` 那条路径也必须刷同一个格子，并且**过期响应不许刷**
+（沿用 `runSeq` 的世代判定）。三条按真实按钮跑完再量（`reqid=200/201/202`，全在 `127.0.0.1`，零出网）：
+
+| 操作（点的是页面上的按钮，不是打桩） | 页脚 |
+| --- | --- |
+| 「开始分析」（`POST /api/isochrone`） | `request_id：9034cf7e71fe4942` |
+| 「一键体检」（`POST /api/analysis`） | `request_id：4334bb27c8c04fe3` ← 顶层号交接成功 |
+| 再点一次「开始分析」 | `request_id：cc527b798c894024`、`dt=request_id` 那行同值 ← **没有停在上一份体检的号上** |
+
+### 4. 官方那两串字符：2026-10-11 逐字复核（公开页面，不占配额）
+
+- `https://lbsyun.baidu.com/` 首页页脚 DOM `innerText` 实取：
+  **`地图审图号：GS(2025)4125|测绘资质：甲测资字11111342`**（与 2026-10-04 首次读取一致），
+  同一页脚另有 `京ICP证030173号`。
+- 页脚外链两条都**照着官方页脚自己的 `<a>` 抄**，本轮实访确认重定向目标：
+  `…/index.php?title=openprivacy` → `/docs/pcsa?title=compliance/openprivacy`，
+  页面自注 **`更新时间: 2026/08/24 10:04`**；
+  `…/index.php?title=open/law` → `/docs/pcsa?title=law/open/law`，自注 **`更新时间: 2026/08/05 19:39`**。
+- 条款 **6.6 原文**逐字可读（就在服务条款页里）：「…您**不得以任何方式进行删除、掩藏、修改或替换**
+  本服务及相关内容中所附的或包含的任何专有权利声明…其他任何链接或公告。」
+
+🔴 **这一条自动化做不到**：审图号只存在于官方 HTML 页脚，没有机器可读真值，百度按年换号。
+测试能验「页面上有这一行」，验不了「这一行还是不是官方那个号」。
+所以 `.foot-review` 带**读取日期**，并把**季度人工复核**登记为唯一兜底（README §10.7 / DESIGN §6.5）。
+与之相对，TTL 那句「24 h / 7 天 / 30 天」由 `test_compliance_footer_ttl_matches_config`
+对着 `Settings.model_fields` 的**类默认值**逐项比对——改配置不改页脚就红。
+
+### 5. 本轮**没有**验的（别当成已验）
+
+1. **审图号会过期**：见 §4，只能靠人工。
+2. **FR-305 的 PNG 导出仍不存在**，而且「live 底图能不能 `toDataURL()`」这件事**只有代码依据、没有实测**：
+   JSAPI 把瓦片画进自己的跨域 `<canvas>`，按规范应抛 `SecurityError`，但验证它要打开 live 底图
+   一次（烧 JSAPI 浏览器端配额），按配额纪律等点头。设计口径已预先收口为
+   「**矢量报告卡 + 标识文字带**」（README §10.7 / DESIGN §6.4）。
+3. **真机**：iOS Safari / Android 上页脚那段 13 px 小字的实际可读性、以及 §1 里 44 px 热区在真手指下的表现。
+4. **首页不放审图号**这个决定：`web/index.html` 不加载地图，只挂 `.foot-legal` 与两条外链；
+   「无地图的页面要不要标审图号」官方没写，本项目按「不需要，但把地图页的指向写清楚」处理，属**自主口径**。
+
+### 6. 收尾
+
+- 门禁（全部**连着退出码**复核，2026-10-11 本轮）：`pytest -q` **501 passed**，对最终代码状态连续五次
+  `exit=0`，5.33 / 5.35 / 5.40 / 5.34 / 5.35 s；`ruff check .` `exit=0`；
+  `black --check .`（49 个文件）**首跑 `exit=1`** 两次——一次是上一轮遗留的引号风格
+  （`test_web_smoke.py` 一处 `'...'` 该写成 `"..."`），一次是本轮新加的那条 `assert ... , (msg)`
+  换行形态；按 black 的写法改完后 `49 files would be left unchanged`、`exit=0`；
+  `node --check web/isochrone.js` / `web/report.js` 各 `exit=0`；
+  `node tools/report_dom_smoke.mjs | grep -c 'OK '` = **15**、`exit=0`；
+  `node tools/map_layers_smoke.mjs _map_input.json | grep -c 'OK '` = **12**、`exit=0`
+  （两条都跑了两遍：一遍用本轮早些时候按另一个中心点生成的 **57 901** 字节桩输入，
+  一遍用 §7 第 5b 条那条命令重新生成的 **96 784** 字节桩输入，**断言数都是 12**——
+  文件大小随请求变，别把它当回归信号）。
+- DOM 计数三个都没变：`report.js` 取 **26** 个 id、`isochrone.js` **62** 个、`isochrone.html` 去重 **96** 个
+  （FR-413 复用了已有的 `#request-id-foot`，没新增 `getElementById`）。
+- 本轮起的 `uvicorn --port 8804` 已 `Stop-Process`，`netstat -ano | grep -c ':8804.*LISTENING'` 实测 **0**；
+  `.fr113-health.json` / `.fr113-analysis.json` / `.fr113-headers.txt` / `.fr413-verify.log` /
+  `_map_input.json` 全部删除；chrome-devtools 设备模拟回到 `1280x800x1`，两个百度官方页面标签已关闭 / 重置为 `about:blank`。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。

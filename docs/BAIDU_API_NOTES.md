@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档目的 | 逐条核验 `PRD.md` 中关于百度地图开放平台的假设，把"猜测值"替换为"官方确认值"，并给出 PRD 修改建议 |
 | 核验方法 | 实际打开官方页面（`lbsyun.baidu.com` 文档站 / `lbs.baidu.com` FAQ 与权益页 / 服务条款页）逐字核对 |
-| 全部来源查阅日期 | **2026-10-04**（本文所有 URL 均在当日访问并读取正文；下文不再逐条重复该日期） |
+| 全部来源查阅日期 | **2026-10-04**（本文所有 URL 均在当日访问并读取正文；下文不再逐条重复该日期）。**例外**：§7.1 的隐私政策条目与 §7.2 的审图号是 **2026-10-11** 为 FR-413 页脚单独复核的，行内已标日期 |
 | 编写说明 | 独立会话产出；**未修改 `PRD.md` 及任何既有文件** |
 | 红线声明 | **凡官方文档未公开的数值，本文一律写「官方文档未公开该数值」；凡需登录控制台才能确认的，写「需登录控制台核实」并列出应点开的页面。不编造任何配额数字、endpoint 路径或参数名。** |
 
@@ -656,7 +656,8 @@ FAQ 2580：中国地区（含港澳台）所有产品支持返回 GCJ02 与 BD09
 
 | 页面 | URL | 查阅日期 |
 | --- | --- | --- |
-| 百度地图开放平台产品和服务协议（主条款；页面更新时间 2026-08-05） | `https://lbsyun.baidu.com/index.php?title=open/law`（实际渲染于 `https://lbsyun.baidu.com/docs/pcsa?title=law/open/law`） | 2026-10-04 |
+| 百度地图开放平台产品和服务协议（主条款；页面自注「更新时间: 2026-08-05 19:39」） | `https://lbsyun.baidu.com/index.php?title=open/law`（实际渲染于 `https://lbsyun.baidu.com/docs/pcsa?title=law/open/law`） | 2026-10-04 · **2026-10-11 复核同一 URL 可达、自注更新时间未变** |
+| **《百度地图开放平台隐私政策》**（条款 7.3 要求外链的那一份；页面自注「更新时间: 2026-08-24 10:04」） | `https://lbsyun.baidu.com/index.php?title=openprivacy`（实际渲染于 `https://lbsyun.baidu.com/docs/pcsa?title=compliance/openprivacy`） | **2026-10-11**（FR-413 页脚外链就是这一条；`web/isochrone.html` 与 `web/index.html` 用的是 `index.php` 那种旧形式，与官方页脚自己的 `<a>` 逐字一致） |
 | 使用者须知 | `https://lbsyun.baidu.com/index.php?title=open/question` | 2026-10-04 |
 | 《技术服务授权协议》 | `https://lbsyun.baidu.com/index.php?title=open/law-commercial` | 2026-10-04 |
 | 《服务购买协议》 | `https://lbsyun.baidu.com/index.php?title=open/law-apisale` | 2026-10-04 |
@@ -688,7 +689,15 @@ FAQ 2580：中国地区（含港澳台）所有产品支持返回 GCJ02 与 BD09
 
 > **使用者须知**：「**必须保留百度版权信息**」；「针对商业应用场景，建议申请百度地图商业授权服务」。
 
-> 站点页脚当前审图号 **GS(2025)4125**、测绘资质 **甲测资字11111342**（2026-10-04 读取）。
+> 站点页脚当前审图号 **GS(2025)4125**、测绘资质 **甲测资字11111342**（2026-10-04 读取；
+> **2026-10-11 用真实浏览器在 `https://lbsyun.baidu.com/` 首页页脚复核未变**，DOM `innerText` 逐字取到的
+> 是 `地图审图号：GS(2025)4125|测绘资质：甲测资字11111342`，同一页脚还带 `京ICP证030173号`）。
+
+> 🔴 **这两串字符会过期，而且自动守不住**：官方只在首页页脚给 HTML 文本，没有机器可读的真值，
+> 百度按年换号。所以 `web/isochrone.html` 的 `.foot-review` 在号码旁边写了**读取日期**，
+> 复核节奏登记为**季度人工**（README §10.7）。与之相对，页脚里那句 TTL（24 h / 7 天 / 30 天）
+> 有 `test_compliance_footer_ttl_matches_config` 对着 `Settings.model_fields` 的类默认值自动比对——
+> **能自动的都自动了，剩下的这段必须靠人**。
 
 ### 7.3 对 FR-402 / FR-412 的逐条判定
 

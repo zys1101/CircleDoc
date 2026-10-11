@@ -1052,6 +1052,11 @@
         clearInterval(timer);
       }
       const payload = await readJson(response);
+      // 🔴 交号要交在**判 ok 之前**：失败时最需要对上服务端日志报号，而 `/api/analysis` 的号
+      // 只在响应顶层（嵌给地图的 `isochrone` 子对象没有它，见 `isochrone.js` 的 `setRequestId`）。
+      if (window.CircleDocMap && window.CircleDocMap.setRequestId) {
+        window.CircleDocMap.setRequestId(payload.request_id || response.headers.get("x-request-id"));
+      }
       if (!response.ok || payload.ok === false) {
         const message =
           (payload.error && payload.error.message) || payload.message || `HTTP ${response.status}`;

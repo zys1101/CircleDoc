@@ -441,12 +441,28 @@
       </div>
     </main>
 
+    <!-- FR-413 / 条款 6.6 + 7.3：页脚是这两条要求唯一的落点。
+         审图号与测绘资质逐字读自 lbsyun.baidu.com 首页页脚（2026-10-11），百度按年换号，
+         号码本身会过期——所以这里带读取日期，且 TTL 由 test_compliance_footer_ttl_matches_config
+         对着 `Settings` 默认值断言，配置一改本页就红。 -->
     <footer class="page-foot">
-      <a href="./index.html">首页</a>
-      <a href="/api/docs">接口文档</a>
-      <a href="/api/health">健康探测</a>
-      <span id="request-id-foot">request_id：—</span>
-      <span>数据来源：百度地图开放平台（合成示例数据由本程序按参数生成，不复制任何第三方内容）</span>
+      <p class="foot-links">
+        <a href="./index.html">首页</a>
+        <a href="/api/docs">接口文档</a>
+        <a href="/api/health">健康探测</a>
+        <a href="https://lbsyun.baidu.com/index.php?title=openprivacy" target="_blank" rel="noopener noreferrer">百度地图开放平台隐私政策</a>
+        <a href="https://lbsyun.baidu.com/index.php?title=open/law" target="_blank" rel="noopener noreferrer">服务条款</a>
+        <span id="request-id-foot">request_id：—</span>
+      </p>
+      <p class="foot-legal">
+        本服务使用<strong>百度地图开放平台</strong>的接口与数据（地理编码 / 逆地理 / 地点检索 / 路线规划与批量算路）。
+        本地缓存仅为减少重复调用的技术措施，不是可对外查询的数据源：地点数据 ≤ 24 小时、路线 ≤ 7 天、地理编码与逆地理 ≤ 30 天，到期即物理删除。
+        示例数据由本程序按参数合成，不含任何第三方原始记录；导出仅限当前一次分析的结果，不得二次分发。
+      </p>
+      <p class="foot-review">
+        地图审图号：GS(2025)4125｜测绘资质：甲测资字11111342
+        <span class="foot-read">（读自 lbsyun.baidu.com 页脚，2026-10-11）</span>
+      </p>
     </footer>
 
     <script src="./isochrone.js" defer></script>

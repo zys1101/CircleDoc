@@ -851,7 +851,7 @@ table.vertices td.sample.sample-blocked_timeout div:first-child {
   font-size: 14px;
 }
 
-/* 可点的文字链接也是热区：`.back`（返回首页）与页脚三条链接本质是移动端的导航，
+/* 可点的文字链接也是热区：`.back`（返回首页）与页脚那一排链接本质是移动端的导航，
    行高只有 ~16 px 就是按不准的东西。用 `inline-flex + min-height` 而不是加 padding，
    因为垂直 padding 会把基线推歪、字看起来往下掉。 */
 .page-map[data-sheet-mode="mobile"] .back,
