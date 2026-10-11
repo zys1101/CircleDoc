@@ -147,6 +147,8 @@ const el = {
   dataMode: document.getElementById("data-mode"),
   run: document.getElementById("run"),
   runHint: document.getElementById("run-hint"),
+  catAll: document.getElementById("cat-all"),
+  categoryHint: document.getElementById("category-hint"),
   pickPoint: document.getElementById("pick-point"),
   recenter: document.getElementById("recenter"),
   applyLnglat: document.getElementById("apply-lnglat"),
@@ -180,6 +182,82 @@ const el = {
 
 const tableBody = el.usageTable.querySelector("tbody");
 const vertexBody = el.verticesTable.querySelector("tbody");
+
+// ---------------------------------------------------------------------------------------------
+// FR-104：设施类别多选
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * 七个勾选框。**一次性取出**：类别组是静态 HTML，运行期不增减；`data-cat` 的取值与顺序
+ * = 后端 `DIMENSION_ORDER`，文案 = `DIMENSIONS[key].label`，`data-blind-cat`
+ * = `BLIND_TRIO_DIMENSIONS`，三处都由 `tests/test_web_smoke.py` 与后端词表逐一对账，
+ * 所以这里只读 DOM、不再抄一份名单（抄了就会有第二出处，改词表时静默失配）。
+ */
+const catBoxes = Array.from(document.querySelectorAll("#categories input.cat"));
+
+/** 勾选框旁边的中文名（读 DOM 而不是查表：避免前端自己维护一份维度文案）。 */
+function catLabel(box) {
+  const span = box.nextElementSibling;
+  return span && span.tagName === "SPAN" ? span.textContent.trim() : box.dataset.cat;
+}
+
+/**
+ * 本次要检索的维度键。
+ *
+ * 返回 `null` = 全七类勾选，此时**不传** `categories`：后端缺省就是全七类，
+ * 而传七个键会让同一中心点的缓存换一把键、白烧一次地点检索配额。
+ * 返回数组 = 只检索这几类。`[]`（一个都没勾）也照实返回，由 `report.js` 在发请求前挡掉 ——
+ * `api/analysis.py` 把 `[]` 当 falsy 折成 `None`，即「检索全部」，
+ * 「取消全部却拿到全七类结果」是最难被看出来的一种假数据。
+ */
+function selectedCategories() {
+  const on = catBoxes.filter((box) => box.checked).map((box) => box.dataset.cat);
+  return on.length === catBoxes.length ? null : on;
+}
+
+/** 被取消、且**装着盲区主判定三个 subcat** 的那几类（取消它们会污染 FR-221 的口径）。 */
+function blindCatsOff() {
+  return catBoxes.filter((box) => box.dataset.blindCat && !box.checked);
+}
+
+/**
+ * 把当前勾选态翻译成人话。四条分支各对应一种可比性：
+ * 全选 = 与后端缺省一致；子集但不碰三类 = 盲区口径仍可比、总分分母跟着变；
+ * 碰了三类 = 盲区面积只可能偏大；零勾选 = 不许跑。
+ * ⚠️ 分支顺序按「最严重优先」写：`on === total` 必须单独成一条，
+ * 否则全选会掉进 subset 文案，而那句是在描述「收窄之后的口径」（实测踩过：7/7 显示成 subset）。
+ */
+function renderCategoryHint() {
+  if (!el.categoryHint) return;
+  const total = catBoxes.length;
+  const on = catBoxes.filter((box) => box.checked).length;
+  if (el.catAll) el.catAll.disabled = on === total;
+  const hurt = blindCatsOff();
+  let state;
+  let text;
+  if (!on) {
+    state = "none";
+    text = `已取消全部 ${total} 类：没有任何设施会被检索，点「一键体检」不会发请求。`;
+  } else if (hurt.length) {
+    state = "hurt";
+    text =
+      `已勾选 ${on}/${total}，但取消的「${hurt.map(catLabel).join("、")}」里装着盲区主判定` +
+      "（FR-221）依赖的设施。盲区层只看得见「附近没命中」，看不见「这一类这次没查」，" +
+      "所以本次盲区面积与「完全盲区」计数只可能偏大、不可能偏小，不能和全选七类的结果比大小" +
+      "（后端会在同一次响应的 notes 里再挂一条同样的警示）。";
+  } else if (on === total) {
+    state = "all";
+    text = "七类全选 = 不限制类别（后端缺省），盲区面积与总分口径都和类别多选落地前一致。";
+  } else {
+    state = "subset";
+    text =
+      `已勾选 ${on}/${total}：本次只检索这几类（每类一次地点检索请求，PRD §4.3）。` +
+      "盲区主判定依赖的三类都还在，盲区面积与全选时可比；但总分会按这几类的权重之和重新归一" +
+      "（报告里的 score.weight_sum 会跟着变小），与全选七类不是同一个分母。";
+  }
+  el.categoryHint.dataset.state = state;
+  el.categoryHint.textContent = text;
+}
 
 // ---------------------------------------------------------------------------------------------
 // 状态
@@ -2528,6 +2606,18 @@ for (const box of [el.heat, el.compare, el.reference, el.showPois, el.showBlind]
   if (box) box.addEventListener("change", () => renderAll(false));
 }
 
+// FR-104 类别勾选：只改提示与请求体，**不重画地图**（图层渲染与类别子集无关，重画纯属浪费）。
+for (const box of catBoxes) box.addEventListener("change", renderCategoryHint);
+if (el.catAll) {
+  el.catAll.addEventListener("click", () => {
+    catBoxes.forEach((box) => {
+      box.checked = true;
+    });
+    renderCategoryHint();
+  });
+}
+renderCategoryHint();
+
 // SVG 舞台交互：pointer 事件（R15：不写 touch* 分支）
 let drag = null;
 el.stage.addEventListener("pointerdown", (event) => {
@@ -2721,6 +2811,8 @@ window.CircleDocMap = {
     mode: el.mode.value,
     minutes: Number(el.minutes.value),
     data_mode: el.dataMode.value || null,
+    // FR-104：全七类勾选 → null（不发 `categories`，与多选落地前的请求体/缓存键一致）。
+    categories: selectedCategories(),
   }),
   setBusy: (busy) => {
     state.running = !!busy;

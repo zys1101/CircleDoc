@@ -491,3 +491,82 @@ async def test_sample_layer_does_not_claim_a_problem_it_does_not_have() -> None:
     assert not any("盲区面积" in note and "偏大" in note for note in report["notes"]), report[
         "notes"
     ]
+
+
+@async_test
+@pytest.mark.parametrize(
+    "categories,expect_note",
+    [
+        (None, False),
+        (["medical", "education", "market", "leisure", "transit", "food", "service_ref"], False),
+        (["medical", "education", "market"], False),
+        (["medical", "education", "leisure", "transit", "food"], True),
+        (["medical", "education", "transit"], True),
+        (["medical"], True),
+        (["leisure"], True),
+    ],
+)
+async def test_narrowed_categories_warn_when_blind_trio_is_affected(
+    categories: list[str] | None, expect_note: bool
+) -> None:
+    """FR-104 少勾类别时，只有**伤到盲区主判定**的那几种才必须挂警示。
+
+    盲区判定（FR-221）固定吃 `market / pharmacy / primary_school` 三个 subcat，而
+    `services/blind_spots.py` 只按「附近没命中」判缺失，分不清「这次没查」。少勾
+    `market` / `medical` / `education` 里任何一维，盲区面积就只可能偏大、不可能偏小
+    （实测交道口只勾 medical 时 47.63 % → 93.49 %；天坛口径下也可能与全选一样是
+    28.4054 —— 偏量为 0 但可比性仍没了，所以文案是**口径声明**而不是「这次算错了」）；
+    勾掉 leisure / transit 这类无关维度则盲区不受影响，这时候挂警示反而是噪声。
+    判据来自 `BLIND_TRIO_DIMENSIONS`（词表层派生，不手写）。
+    """
+    from services.analysis import run_analysis
+
+    report = await run_analysis(
+        [116.404, 39.915],
+        modes=["walking"],
+        minutes=15.0,
+        categories=categories,
+        data_mode="mock",
+        poi_service=_StubPoiService("sample"),
+    )
+    joined = " ".join(report["notes"])
+    flagged = "这一类这次没查" in joined
+    assert flagged is expect_note, (categories, report["notes"])
+    if expect_note:
+        assert "只可能偏大" in joined and "比大小" in joined, report["notes"]
+
+
+@async_test
+async def test_narrowed_categories_also_change_the_score_denominator() -> None:
+    """勾掉任何一个**计分**维度，总分的分母就跟着变 —— 前端那句「不是同一个分母」的提示靠这条兜底。
+
+    `services/score.py:weighted_total()` 默认按「本次计分维度权重之和」归一化：全选七类是
+    0.95（PRD §4.3 的真实缺口），只勾三类是 0.55，只勾一类是 0.20。于是「取消餐饮服务」这种
+    **不碰盲区判定**的操作也会移动总分，而 `weight_sum` 与那条归一化 note 是唯一的线索。
+
+    期望值一律从词表算出来（不手写 0.95 / 0.55）：改权重表时这条不该红。
+    ⚠️ 这里**不能用 `_StubPoiService`**：它返回固定两份 groups、不认识 `categories`，
+    测出来的分母是 stub 的性质而不是产品的行为（第一版就栽在这里，`full` 读出 0.4）。
+    """
+    from services.analysis import run_analysis
+    from services.poi_categories import DIMENSION_ORDER, DIMENSIONS
+
+    def scored_sum(keys: list[str]) -> float:
+        return sum(DIMENSIONS[key]["weight"] for key in keys if DIMENSIONS[key]["scored"])
+
+    async def weight_sum(categories: list[str] | None) -> float:
+        report = await run_analysis(
+            [116.404, 39.915],
+            modes=["walking"],
+            minutes=15.0,
+            categories=categories,
+            data_mode="mock",
+        )
+        return float(report["score"]["weight_sum"])
+
+    subset = ["medical", "education", "market"]
+    full = await weight_sum(None)
+    narrowed = await weight_sum(subset)
+    assert full == pytest.approx(scored_sum(list(DIMENSION_ORDER))), full
+    assert narrowed == pytest.approx(scored_sum(subset)), narrowed
+    assert narrowed < full, (narrowed, full)

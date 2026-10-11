@@ -205,6 +205,69 @@
 二是该 MCP 的写文件落点被限制在它的 workspace root（本机 `C:\Users\adm`），写不进仓库路径。
 所以本文件延续既有口径：**以 DOM 计数、network 记录、状态行与 tooltip 原文作为可复核证据**。
 
+## FR-104 设施类别多选 · 真实浏览器复验（2026-10-11，实现人自验，零出网）
+
+本轮的条件与 10-10 那轮**相反**：这台机器现在配了真实 AK，所以「零出网」不再由缺配置保证，
+必须自证。起服务时把两个 AK 用空值环境变量覆盖 `.env`（`BAIDU_SERVER_AK= BAIDU_BROWSER_AK=`），
+端口 `8795`。
+
+### 1. 先确认它真的没出网
+
+| 证据 | 取值 |
+| --- | --- |
+| `GET /api/health` | `server_ak_type: not_configured` |
+| 整轮 DevTools network 记录 | **8 条**，全部指向 `127.0.0.1:8795`（`health`、`samples`、2 条 `POST /api/analysis`、4 条 `POST /api/isochrone`），**零条出网** |
+| `POST /api/analysis` 响应头 | `x-http-requests: 0`、`x-place-calls: 0`、`x-quota-units: 0` |
+
+### 2. 收窄勾选 → 请求体、警示、分母三处同时对上
+
+勾选 `基础医疗 / 养老休闲 / 公共交通 / 餐饮服务 / 便民服务`（取消 教育、购物市场），点「一键体检」：
+
+```json
+{"minutes":15,"modes":["walking"],"platform":"desktop","lnglat":"116.4074,39.9042",
+ "data_mode":"mock","categories":["medical","leisure","transit","food","service_ref"]}
+```
+
+* 状态行原文：**「完成：51.7 分（D），耗时 83 ms。 地图叠加：21 个圈内设施 + 1 块盲区。」**
+* `#analysis-notes` 里逐字渲染了盲区警示（含「只可能偏大、不可能偏小」「这一类这次没查」两句）；
+  被取消的 `education` / `market` 正是装着 `primary_school` / `market` 的维度，所以该出现。
+* 评分事实：**「已按计分权重之和 0.60 归一化到 0~100；字面口径值 40.0」**
+  —— 0.60 = 0.20 + 0.15 + 0.15 + 0.10 + 0.00，与勾选的五类逐一对得上，**分母确实跟着变了**。
+* **全选态不发 `categories` 键**（这条口径必须有请求体级证据，光看代码不算验过）。七类勾满再点一次，
+  DevTools 记到的 body 是 `content-length: 102` 的
+  `{"minutes":15,"modes":["walking"],"platform":"desktop","lnglat":"116.4074,39.9042","data_mode":"mock"}`
+  —— **确实没有 `categories` 键**。同一次的状态行：**「完成：44.6 分（D），耗时 15 ms。 地图叠加：23 个圈内设施 + 1 块盲区。」**
+  与收窄那次的 51.7 分 / 21 个设施摆在一起，正是「分母不同、不可比大小」的现场样本（同一中心点、同一 `mock` 层）。
+* **0/7 挡在 `fetch` 之前**：取消全部后点「一键体检」，`performance.getEntriesByType('resource')` 里
+  `/api/analysis` 的计数 **2 → 2 不变**（真的没发请求），`#analysis-hint` 原文
+  「未勾选任何设施类别（0/7）：没有设施会被检索，本次没有发请求。至少勾一类。」
+* **「恢复全选」按钮**：在 0/7 态可点，点完 `#category-hint` 回 `all`、按钮自身转 `disabled`、
+  `readControls().categories` 回 `null`。
+
+### 3. 🔴 本轮抓出的真实缺陷：全选时提示写的是「本次只检索这类」
+
+七个框默认全勾，页面加载后 `#category-hint` 却是 `data-state="subset"` +
+「已勾选 7/7：本次只检索这几类…」。根因、修法与三条回归断言见 `docs/TEST_REPORT.md` §2.10。
+**这一条是本轮唯一的非文案收获**：`node --check` 与当时全部单测都是绿的，
+只有把页面打开、读那一句字才看得见。
+
+修复后四态的实测（`getComputedStyle`，重跑一轮逐态取样）：
+
+| 勾选态 | `data-state` | 颜色 | 字重 | `readControls().categories` |
+| --- | --- | --- | --- | --- |
+| 7/7 全选 | `all` | `rgb(107, 114, 128)`（灰 = 不警示） | 400 | `null` |
+| 6/7，只取消 `service_ref`（不碰三类） | `subset` | `rgb(169, 100, 10)`（琥珀） | 400 | 6 元素数组 |
+| 6/7，取消 `market` | `hurt`（首句「已勾选 6/7，但取消的「购物市场」里装着盲区主判定（FR-…」） | `rgb(207, 34, 46)` | **600** | 6 元素数组 |
+| 0/7 | `none` | `rgb(207, 34, 46)` | **600** | `[]`（由 `runAnalysis()` 挡下） |
+
+### 4. 本轮**没有**验的
+
+1. **live / cache 下的 `categories` 效果**：零出网是本轮前提。子集只改检索集合，不改算路，
+   所以 live 侧的额外风险只在配额（子集省调用），不在结论形态。
+2. **移动端（≤ 768 px）下的七行勾选**：抽屉本身还没实现（见 README §10.3 的更正），
+   本轮只在桌面宽度验。
+3. **键盘 Tab 顺序穿过七个框 + 「恢复全选」**：未逐项走查，只确认框是原生 `input[type=checkbox]`。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。

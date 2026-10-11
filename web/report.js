@@ -958,11 +958,24 @@
       body.lnglat = `${center[0]},${center[1]}`;
     }
     if (controls.data_mode) body.data_mode = controls.data_mode;
+    // FR-104 类别多选：全七类勾选时 `readControls()` 给 `null`，这里就**不发**这个键
+    // （后端缺省即全七类，缓存键与多选落地前完全一致；发七个键会让同一中心点换一把缓存键）。
+    // 收窄过才发数组；`[]`（一个都没勾）也照实带上，由 `runAnalysis()` 在发请求前挡掉——
+    // `api/analysis.py` 把 `[]` 折成 `None`（falsy），也就是「检索全部」，
+    // 「取消全部却拿到全七类结果」是这份报告最不能出现的一种假数据。
+    if (Array.isArray(controls.categories)) body.categories = controls.categories;
     return body;
   }
 
   async function runAnalysis() {
     if (busy) return;
+    const body = payloadForRun();
+    // 🔴 FR-104：一个类别都没勾时**不发请求**。`api/analysis.py` 把 `[]` 当 falsy 折成 `None`
+    //    （= 检索全七类），于是「取消全部」会拿到一份看着完全正常的报告——比报错更糟。
+    if (Array.isArray(body.categories) && !body.categories.length) {
+      el.hint.textContent = "未勾选任何设施类别（0/7）：没有设施会被检索，本次没有发请求。至少勾一类。";
+      return;
+    }
     setBusy(true);
     el.hint.textContent = "正在请求 /api/analysis…";
     if (window.CircleDocMap && window.CircleDocMap.clearProgress) {
@@ -970,7 +983,6 @@
     }
     if (el.exportHint) el.exportHint.textContent = "分析进行中…";
     try {
-      const body = payloadForRun();
       // 进度是**近似**的：同步接口一次性返回，这里用一个计时器按后端阶段数走字，
       // 明确标注「阶段由响应回传」，不假造百分比（真正的阶段表在响应 usage.stages 里）。
       let tick = 1;

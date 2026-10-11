@@ -140,6 +140,57 @@
               <option value="mock">mock 合成示例</option>
             </select>
           </label>
+          <!--
+            FR-104 设施类别多选。三条口径写在这里，改动前先读：
+              1. `data-cat` 的取值与顺序 = 后端 `services/poi_categories.py` 的 `DIMENSION_ORDER`，
+                 勾选框文案 = `DIMENSIONS[key]["label"]`，两边由 tests/test_web_smoke.py 逐一对账。
+              2. `data-blind-cat` 标记 = 后端 `BLIND_TRIO_SUBCATS`（市场 / 药店 / 小学）实际住在
+                 哪几个维度里。取消这几类会让 FR-221 的盲区判定把「这次没查」当成「附近没有」，
+                 盲区面积被系统性高估 —— 前端在这里同步提示，后端在同一次响应的 `notes` 里
+                 挂同样的警示（`services/analysis.py`），两边各说一遍是因为报告可能离线导出。
+              3. 全七类勾选时**不传** `categories`（后端缺省即全七类）：传七个键会让同一中心点的
+                 缓存换个键、白烧一次地点检索配额。
+          -->
+          <fieldset class="nested" id="categories">
+            <legend>设施类别（FR-104：勾选的类才检索）</legend>
+            <label class="check">
+              <input type="checkbox" class="cat" data-cat="medical" data-blind-cat="1" checked />
+              <span>基础医疗</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" class="cat" data-cat="education" data-blind-cat="1" checked />
+              <span>教育</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" class="cat" data-cat="market" data-blind-cat="1" checked />
+              <span>购物市场</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" class="cat" data-cat="leisure" checked />
+              <span>养老休闲</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" class="cat" data-cat="transit" checked />
+              <span>公共交通</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" class="cat" data-cat="food" checked />
+              <span>餐饮服务</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" class="cat" data-cat="service_ref" checked />
+              <span>便民服务（参考项）</span>
+            </label>
+            <p class="hint">
+              「便民服务（参考项）」不计分（PRD §4.3），取消它只少一类明细。
+            </p>
+            <p class="hint" id="category-hint" data-state="all">
+              七类全选 = 不限制类别（后端缺省），盲区面积与总分口径都和类别多选落地前一致。
+            </p>
+            <p class="actions">
+              <button type="button" id="cat-all">恢复全选</button>
+            </p>
+          </fieldset>
           <p class="actions">
             <button type="button" id="run" class="primary">开始分析</button>
             <span class="hint" id="run-hint">尚未运行。</span>

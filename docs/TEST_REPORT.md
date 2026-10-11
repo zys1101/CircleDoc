@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | --- | --- |
 | 文档定位 | PRD §9 交付物「对比测试报告」；对应 FR-405、FR-406、§6.1、§6.2 |
-| 最后更新 | 2026-10-10 |
+| 最后更新 | 2026-10-11 |
 | 测试命令 | `pytest -q`（零配置、零 AK、零真实出网） |
-| 结论 | **439 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
+| 结论 | **451 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
 
 ---
 
@@ -14,11 +14,14 @@
 **2026-10-10 起本项目已接入真实百度 AK**（服务端 + 浏览器端两类，配在 gitignored 的 `.env` 里）。
 所以这份报告现在有两类证据，**口径不同、不互相顶替**：
 
-* **`mock` 侧**：439 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
+* **`mock` 侧**：451 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
   也是本文 §1、§2、§3、§5 的主口径。
 * **`live` 侧**：§4.3 是一次**真实出网**的端到端实跑（三样例各一次），§6 的「JSAPI 实底图顶点点击」
   是另一次真实浏览器 + 真实出网的补验。§2.6 ~ §2.9 四个缺陷**只有在 live 下才暴露**——
   离线演示阶段它们全被「合成报文比真实报文更完整」盖住了。
+* **浏览器侧**：§2.10 与 §6 的若干断言要把页面真打开才看得见。**§2.10 不属于 live 缺陷**——
+  它在 `data_mode=mock`、零出网的服务器上照样复现，漏网的原因和前四条不同：
+  **缺的是「有人读过页面上的字」，不是缺真实数据。**
 
 两条纪律没有因为「有了 AK」而放松：
 
@@ -41,25 +44,36 @@
 | `test_blind_spots.py` | 32 | 网格生成、haversine 判定、flood fill、轮廓追踪、两级阈值 | FR-220 ~ FR-224 |
 | `test_score.py` | 31 | 加权、95 % 权重缺口裁决、等级线、盲区惩罚、摘要生成 | FR-301、FR-302、FR-304 |
 | `test_isochrone_api.py` | 26 | `/api/isochrone` 全形状、降级、polyline 12 次硬上限 | FR-201、FR-203、FR-403 |
-| `test_analysis_api.py` | 38 | `/api/analysis` 报告形状、任务轮询、后台模式、`/api/poi` 七维度、错误信封、**真实检索盲区偏大提示（`live` 与 `cache` 两态各断言一次 + `sample` 反向断言）** | §4.7、FR-205、FR-404、§4.4、§2.9 |
-| `test_web_smoke.py` | 27 | 静态页可服务、零公网外链、**DOM 契约对账**、FR-212/222/213 的前端接线 | R11、R12、R13、FR-213 |
+| `test_analysis_api.py` | 46 | `/api/analysis` 报告形状、任务轮询、后台模式、`/api/poi` 七维度、错误信封、**真实检索盲区偏大提示（`live` 与 `cache` 两态各断言一次 + `sample` 反向断言）**、**FR-104 类别子集：伤及盲区主判定的 7 种勾选组合逐一断言 + 总分分母随子集收缩** | §4.7、FR-205、FR-404、§4.4、§2.9、FR-104 |
+| `test_web_smoke.py` | 31 | 静态页可服务、零公网外链、**DOM 契约对账（两个脚本）**、**前端类别勾选 ↔ 后端词表逐项对账**、FR-212/222/213 的前端接线 | R11、R12、R13、FR-213、FR-104 |
 | `test_samples_baseline.py` | 16 | 三样例一致性、三型差异方向、基线不漂 | FR-102、FR-412、§6.1 |
 | `test_coord_param_table.py` | 13 | 接口 × 坐标参数名 × 坐标顺序常量表 | FR-406、R8 |
 | `test_health_contract.py` | 10 | `/api/health` 三个「数据模式」字段的位置与值域、零配置横幅、AK 不外泄 | §4.6、FR-404、FR-410 |
 | `test_cache_store_singleton.py` | 4 | 缓存单例口径唯一 | FR-402 |
-| **合计** | **439** | | |
+| **合计** | **451** | | |
 
-耗时：**4.8 ~ 11.6 s**（同一轮 439 例，本机两次实测 4.76 / 4.84 s，另两次 8.94 / 11.55 s）。
-这个区间**不是代码回归**，是后台负载：慢的那两次 `chrome-devtools` 浏览器与它的 node MCP 服务都在线，
+耗时：**4.49 ~ 4.77 s**（同一轮 451 例，本机连续三次实测）。上一轮记录的 8.94 / 11.55 s
+**不是代码回归**而是后台负载：那次 `chrome-devtools` 浏览器与它的 node MCP 服务都在跑，
 纯 CPU 基准 `sum(range(10**7))` 同时段实测 0.644 s（正常量级的两倍），最慢单例
-`test_task_registry_is_bounded` 也从 0.68 s 涨到 1.9 ~ 2.3 s。无网络、无外部数据库、无 Redis。
+`test_task_registry_is_bounded` 也从 0.68 s 涨到 1.9 ~ 2.3 s。本轮三次测量时浏览器 MCP
+**仍然在线**，所以那个区间只能说明「同一台机器同一份代码可以差 2.4 倍」，
+不能说明任何代码性质。无网络、无外部数据库、无 Redis。
 
-### 1.1 三条值得单独说的断言
+### 1.1 四条值得单独说的断言
 
-**`test_web_smoke.py::test_report_js_ids_all_exist_in_the_page`** —— 把 `web/report.js` 里
-`getElementById("…")` 的 25 个 id 全部抠出来，逐个断言 `isochrone.html` 里存在。
-抓的是「改了 HTML 忘了改 JS」：漏一个 id，`el.x` 就是 `null`，报告某一块永远空白，
-而**控制台一条错误都不会有**。这是 R11「无构建模式没有类型检查兜底」那条风险的实际落点。
+**`test_web_smoke.py::test_every_get_element_by_id_exists_in_the_page`** —— 把**两个**脚本
+（`web/report.js` 与 `web/isochrone.js`）里 `getElementById` 取到的 id 全部抠出来，逐个断言
+`isochrone.html` 里存在。抓的是「改了 HTML 忘了改 JS」：漏一个 id，`el.x` 就是 `null`，
+报告某一块永远空白，而**控制台一条错误都不会有**。这是 R11「无构建模式没有类型检查兜底」
+那条风险的实际落点。两个脚本都要覆盖是 FR-104 这轮补上的：先前只盯 `report.js`，
+`isochrone.js` 新取的 `#cat-all` / `#category-hint` 正好落在哨兵外面。
+
+**`test_web_smoke.py::test_category_checkboxes_match_the_backend_wordlist`** ——
+FR-104 的七个勾选框与 `services/poi_categories.py` **逐键、逐序、逐文案**对齐，
+连「哪几类装着盲区主判定」的 `data-blind-cat` 标记也要等于派生常量 `BLIND_TRIO_DIMENSIONS`。
+这条是前端与后端词表之间唯一的自动对账：`data-cat` 写了后端不认的键就是每次体检直接 400，
+而 `data-blind-cat` 指错维度会让页面提示「口径可比」、实际盲区面积已被高估 ——
+后者恰好是这份报告最不该错的东西。
 
 **`test_analysis_api.py::test_booleans_are_rejected_instead_of_coerced_to_one`** ——
 pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 变成一个**1 米**的
@@ -71,13 +85,15 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 
 ---
 
-## 2. 开发过程中发现并修复的九个真实缺陷
+## 2. 开发过程中发现并修复的十个真实缺陷
 
-九份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
+十份都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
 「把 CI 脚本真的执行一遍」「在最小 DOM 打桩下真跑一遍绘制路径」
 「**配上真实 AK 跑一遍 live 全链路**」之后暴露的。
 其中 §2.6 ~ §2.9 四个**只在接入真实 AK 之后才可能出现** —— 在离线演示阶段，
 它们全都被「合成数据比真实数据更完整」这件事盖住了。
+§2.10 是**在真实浏览器里点出来的**：`node --check` 与 451 例单测全绿，全选态的提示文案
+却仍然写错，因为那条分支只有真人打开页面才会看到。
 
 ### 2.1 `services/poi_search.py`：7 处协程未 `await`（会导致接口 500）
 
@@ -319,6 +335,56 @@ scope=2   → 多出 detail_info = tag「医疗;综合医院」/ classified_poi_
 **这条为什么值得单独记**：它是**第四个**「只有接了真实 AK 才看得见」的缺陷（前三条见 §2.6 ~ §2.8），
 而且和前两条不同——它不在数据层，在**我自己为了「诚实披露缺陷」而写的那段代码里**。
 用 mock 报文跑的单测永远只会喂 `live` 或 `sample`，`cache` 这一态要有一份真实缓存才会出现。
+
+### 2.10 🔴 七类全选时提示写的是「本次只检索这几类」——`node --check` 与 451 例单测全绿拦不住
+
+**现象**（2026-10-11 真实浏览器复验 FR-104 时抓到）。`web/isochrone.html` 的七个勾选框默认全勾，
+但页面加载后 `#category-hint` 渲染出来的是：
+
+| 勾选态 | 修复前 `data-state` | 修复前首句 | 修复后 |
+| --- | --- | --- | --- |
+| 7/7 全选 | `subset` ❌ | 「已勾选 7/7：本次只检索这几类…」 | `all`：「七类全选 = 不限制类别（后端缺省）…」 |
+| 5/7，不碰盲区三类 | `subset` ✅ | 正确 | 不变 |
+| 4/7，碰了盲区三类 | `hurt` ✅ | 正确 | 不变 |
+| 0/7 | `none` ✅ | 正确 | 不变 |
+
+只有全选那一格是错的，而它恰好是**用户进页面第一眼看到、也是缺省态**的那一格。
+
+**根因**：`renderCategoryHint()` 里 `all` 只写成了一个初值（`let state = "all"`），
+`if / else if / else` 链**没有 `on === total` 这条分支**，于是全选必然落进末尾的 `else`（subset）。
+而 subset 那句描述的是「收窄之后的口径」——它宣称「每类一次地点检索请求」
+「总分会按这几类的权重之和重新归一」，这两件事在全选时**都没发生**（全选时前端根本不发 `categories` 键，
+后端也就不存在按子集归一）。这是一句假陈述，不是措辞不当。
+
+**为什么门禁没拦住**：`node --check` 只验语法，初值与分支写法在语法上无可指摘；451 例单测里
+**没有任何一例断言过全选态的文案**。这是本条最值得记的点——纯文本分支错误，只有把页面打开、
+不看逻辑只看字才看得见。
+
+**修复**：改成四条显式分支、按「最严重优先」排序（`none` → `hurt` → `all` → `subset`），
+函数上方留 ⚠️ 注释写明「`on === total` 必须单独成一条」；
+HTML 里 `#category-hint` 的静态首屏文案一并改成与 `all` 分支**逐字一致**——JS 一加载就覆盖它，
+两边写岔就是「刷新瞬间看到第五套口径」。
+
+**回归覆盖**（`tests/test_web_smoke.py`，三条各钉一个失效面）：
+
+* `test_category_checkboxes_match_the_backend_wordlist`：断言 `isochrone.js` 里同时出现
+  `state = "all"` 与 `on === total`（少一条分支就红），并要求 HTML 静态文案能在 JS 里逐字找到；
+* `test_category_hint_states_are_styled`：态名单**从 JS 里取**（`state = "([a-z]+)"`）而不是测试里手写，
+  要求恰好 `{all, none, subset, hurt}`，且除 `all` 外每态都在 CSS 里有 `[data-state=…]` 规则
+  ——否则加第五态时手写名单会静默通过；
+* `test_category_selection_is_only_sent_when_narrowed`：钉住「全选折叠成 `null`、零勾选挡在 `fetch` 之前」。
+
+**同一次浏览器验证里顺带自证的零出网**（这台机器已配真实 AK，所以必须验证没有烧配额）：
+服务端用空值覆盖 `.env`（`BAIDU_SERVER_AK= BAIDU_BROWSER_AK=`）起在 `127.0.0.1:8795`，
+`/api/health` 报 `server_ak_type: not_configured`；一轮 `mock` 走查（天坛 `116.4074,39.9042`）的
+network 记录 **8 条、全部指向 `127.0.0.1`**（`health` / `samples` / 2 次 `POST /api/analysis` / 4 次
+`POST /api/isochrone`），响应头 `x-http-requests: 0 / x-place-calls: 0 / x-quota-units: 0`。
+收窄五类（`medical,leisure,transit,food,service_ref`）那次的请求体带
+`"categories":["medical","leisure","transit","food","service_ref"]`，页面结果
+「完成：51.7 分（D），耗时 83 ms。 地图叠加：21 个圈内设施 + 1 块盲区。」，`notes` 里同时渲染了盲区警示
+与「已按计分权重之和 0.60 归一化到 0~100」；**同一中心点全选那次的请求体里没有 `categories` 键**，结果
+「完成：44.6 分（D），耗时 15 ms。 地图叠加：23 个圈内设施 + 1 块盲区。」。四态文字色实测
+`rgb(107,114,128)` / `rgb(169,100,10)` / `rgb(207,34,46)`。逐条出处见 `docs/shots/README-isochrone-acceptance.md`。
 
 ---
 
@@ -615,6 +681,7 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 | 🔴 **新发现，未修**：live 等时圈的响应体 `usage` 比服务端请求级计量少记 | 同一次 `POST /api/isochrone`：`body.usage` 是 `quota_units=40 / http_requests=6`，同 `request_id` 的服务端日志是 `44 / 7`，差一个批次 | 方向是**少报**（真实花费 ≥ 报告值），所以 §6.1 的预算断言在 live 等时圈这条路径上偏乐观。mock 层两账本同源、冒烟自测抓不到。**尚未定位**是哪一批没并进 `ProbeTally`，登记为待修而不是文档口径 |
 | live 模式下 FR-221 盲区结论的**准确性** | `market` 系统性为 0，见 §4.4 | 盲区面积在 live 模式下**系统性偏大**，不能当成真实结论呈现；根因已定位在检索层，无 PRD 框架内的干净修法。**2026-10-10 定口径：接受并明示**（见 §4.4 末的决策段）——真实检索那一侧（`data_source = live` **与 `cache`**）的报告由后端 `notes` 自动带这条提示，`mock` 口径不受影响；`cache` 一起算的原因见 §2.9 |
 | `docker compose up` | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → `/api/health` + `/api/samples` + `POST /api/analysis` 可服务）。**仍未验**：compose 的起停、以及 CI 没挂 `-v` 所以「Linux 宿主 UID 1000 对 `./data` 的写权限」这条在开发机上复现不出来 |
+| 🔴 **FR-106 底部抽屉：功能未实现**（2026-10-11 登记） | `≤ 768 px` 只有单栏堆叠断点（`isochrone.css` 1100/480、`report.css` 768），没有可拖拽展开/收起的抽屉，地图也不占满首屏 | README §10.3 此前把「抽屉可展开收起」写成已按 §6.3 验收，属**不实陈述**，已就地更正。**连带未验**：PRD §6.3 的「两档视口 375×667 / 414×896 无横向滚动、无元素重叠」在 `docs/` 里没有任何可复现证据，此前也没人拍过——FR-106 落地时必须一并补 |
 | 移动端**真机**行为 | 只有 Chrome DevTools 模拟，无 iOS / Android 实机 | 手指惯性拖图、双指缩放、iOS Safari 滚动穿透三项未验证；官方也未公开 JSAPI 4.0 的精确移动兼容矩阵 |
 | 浏览器内真实渲染 | 本环境的无头 Chrome 无输出（被沙箱挡住） | 改用 Node + 最小 DOM 打桩真跑 `web/report.js` 与 `web/isochrone.js` 的**绘制路径**（`tools/report_dom_smoke.mjs` **15 项** + `tools/map_layers_smoke.mjs` **12 项**，`grep -c 'OK '` 实测；此前本文写 17、README/DESIGN 写 12，三处都对不上脚本真实输出，已统一），但它**不是**真实浏览器 |
 | 前端截图（**能拍、但不入库**） | 2026-10-10 起 chrome-devtools 通道能截图（实时底图与橙色真实路网线已现场目视确认） | **仍不提供 PNG**：截图必然含百度瓦片与版权条，把第三方地图影像固化进开源仓库是另一回事；本文件继续以 DOM 计数、network、状态行/tooltip 原文作证据 |

@@ -34,6 +34,7 @@ from typing import Any
 __all__ = [
     "ALL_DIMENSIONS",
     "BANNED_QUERY_TERMS",
+    "BLIND_TRIO_DIMENSIONS",
     "BLIND_TRIO_SUBCATS",
     "COORD_TYPE_BD09LL_NUMERIC",
     "DIMENSIONS",
@@ -417,6 +418,22 @@ SCORED_DIMENSIONS: tuple[str, ...] = tuple(
     key for key in DIMENSION_ORDER if DIMENSIONS[key]["scored"]
 )
 
+BLIND_TRIO_DIMENSIONS: frozenset[str] = frozenset(
+    key
+    for key in DIMENSION_ORDER
+    if set(DIMENSIONS[key].get("subcats") or ()) & set(BLIND_TRIO_SUBCATS)
+)
+"""🔴 `BLIND_TRIO_SUBCATS` 这三个 subcat **分别住在哪几个维度里**（派生，不手写）。
+
+存在的理由只有一个：`categories`（FR-104 的类别多选）允许只检索部分维度，而
+`services/blind_spots.py` 的主判定固定要 `market / pharmacy / primary_school` 三类，
+它按 subcat 命中、**不知道某一类这次根本没被检索**。于是「没查」会被当成「不存在」，
+盲区面积凭空翻倍（实测：交道口只选 medical 时 47.63 % → 93.49 %）。
+调用方（`services/analysis.py`）用这个集合判断本次子集是否伤及盲区判定，并如实挂 note。
+
+写成派生而不是 `frozenset({"market", "medical", "education"})`：将来词表给小学换了维度、
+或药店从 medical 拆出去时，手写的那份会静默失效，而这里会自动跟着变。"""
+
 SCORED_WEIGHT_SUM = 0.95
 """⚠️ 六个计分维度权重合计 **95 %（0.20+0.15+0.20+0.15+0.15+0.10），不是 100 %**。
 
@@ -586,6 +603,15 @@ def wordlist_problems() -> list[str]:
     for subcat in BLIND_TRIO_SUBCATS:
         if subcat not in SUBCAT_OFFICIAL_PATH:
             problems.append(f"BLIND_TRIO_SUBCATS 里的 {subcat!r} 无官方路径映射")
+    covered = {
+        subcat for key in BLIND_TRIO_DIMENSIONS for subcat in (DIMENSIONS[key].get("subcats") or ())
+    }
+    orphaned = [subcat for subcat in BLIND_TRIO_SUBCATS if subcat not in covered]
+    if orphaned:
+        problems.append(
+            f"盲区三类的 subcat {orphaned} 不属于任何维度 —— `categories` 多选无法据此"
+            "判断本次是否伤及盲区判定（`BLIND_TRIO_DIMENSIONS` 失去意义）"
+        )
     if "菜市场" not in BANNED_QUERY_TERMS:
         problems.append("「菜市场」必须留在黑名单里（FR-221 的 README 说明依赖它）")
 

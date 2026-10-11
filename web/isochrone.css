@@ -170,6 +170,27 @@ select {
   margin-top: 2px;
 }
 
+/* FR-104 类别勾选的口径提示。三态由 `isochrone.js:renderCategoryHint()` 写在 data-state 上，
+   颜色不落在 JS 里（改配色不该动判定逻辑）。`hurt` / `none` 会改变结论的可比性，
+   所以必须比 `.hint` 的灰色响；`subset` 是「省配额但口径仍可比」，用琥珀色就够。 */
+#category-hint[data-state="hurt"],
+#category-hint[data-state="none"] {
+  color: #cf222e;
+  font-weight: 600;
+}
+
+#category-hint[data-state="subset"] {
+  color: var(--warn);
+}
+
+#categories .check {
+  margin: 4px 0;
+}
+
+#cat-all:disabled {
+  opacity: 0.45;
+}
+
 /* 舞台：SVG 与 JSAPI 容器叠在同一块定位区里，永远只有一个可见。 */
 .stage-area {
   position: relative;

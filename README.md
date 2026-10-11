@@ -8,10 +8,10 @@
 | 技术栈 | Python 3.11 + FastAPI 后端 · 零构建链原生 HTML/CSS/JS 前端 · SQLite 运行时缓存 · Docker 一键部署 |
 | 地图依赖 | 百度地图开放平台 Web 服务 API + JSAPI 4.0（浏览器端，按需动态注入、可降级） |
 | 事实依据 | 配额、接口路径、参数名、状态码、条款判定**一律以 [`docs/BAIDU_API_NOTES.md`](docs/BAIDU_API_NOTES.md) 为唯一出处**（2026-10-04 逐接口核验官方文档所得）；架构与需求见 [`PRD.md`](PRD.md) |
-| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（439 例单测 + 对比实验 + 诚实登记的未验证项） |
+| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（451 例单测 + 对比实验 + 诚实登记的未验证项） |
 | 部署细节 | [`tools/README-deploy.md`](tools/README-deploy.md)（Dockerfile / compose / run 脚本的设计取舍） |
 | 开源协议 | [Apache License 2.0](LICENSE) |
-| 最后更新 | 2026-10-10 |
+| 最后更新 | 2026-10-11 |
 
 > **本文的写法约定**：凡是**代码里量过、跑过**的数字直接写出来并给出复现命令；凡是**依赖真实网络**才能得到的结论，一律写成「**未验证**」并说明原因，不含糊带过。
 >
@@ -45,6 +45,8 @@
 | --- | --- |
 | 三种方式确定中心点：地图点选 / 地址文本 / 直接输入 `lng,lat` | FR-101 |
 | 3 个预置样例社区，同城三种建成形态（老城 / 新建大盘 / 城中村） | FR-102 |
+| 参数面板：出行方式、目标时长（5 / 10 / 15 / 30 min）、**设施类别七类多选**（取消盲区三类时前后端各挂一条警示） | FR-104 |
+| 数据模式开关 `live` / `cache` / `mock`，缺省值由启动探测决定而不是硬编码 | FR-105 |
 | 步行 + 骑行双模式等时圈，可叠加对比 | FR-201、FR-206 |
 | 等时圈边界顶点可点击，查看该方向实测耗时与真实路径（懒加载） | FR-203 |
 | 可达性热力图（250 m 网格 IDW 耗时场） | FR-204 |
@@ -113,7 +115,7 @@ python -m venv .venv
 ### 2.4 本地校验（零 AK、零出网）
 
 ```bash
-pytest -q                                              # 439 例（实测，零配置 / 零 AK / 零出网）
+pytest -q                                              # 451 例（实测，零配置 / 零 AK / 零出网）
 python -c "from services.poi_categories import assert_wordlist; assert_wordlist()"
 python tools/gen_samples.py --check                     # 合成样例基线校验
 ruff check . && black --check .                         # 零告警
@@ -302,6 +304,7 @@ node tools/report_dom_smoke.mjs                         # 报告面板渲染路�
 - **`/api/regeo` 的坐标系参数名是 `coordtype`**（无下划线、传字符串），而请求里的 `location` 是 **`纬度,经度`**，本接口的入参 `lnglat` 却是 **`经度,纬度`**。换算只在 `services/geo.py` 做一次（详见 §6.4）。
 - **`/api/poi` 不使用多边形区域检索**——它需商用授权，个人档报 `status=9`（决策 D10）。
 - **`/api/analysis` 的双模式**（`walking` + `riding`）下 POI **只检索一次**，骑行圈复用同一份 POI 集合，`place_calls` 不翻倍。
+- **`categories`（FR-104）三条口径**：全选七类时前端**不发这个键**（发了就等于给同一中心点换一把缓存键、白烧一次配额）；**空数组 `[]` 会被后端折成「检索全七类」**（`api/analysis.py` 用 falsy 判断），所以零勾选必须由前端挡在 `fetch` 之前，不能指望后端报错兜住；**取消掉装着盲区主判定的那几类只会让盲区面积偏大、不会偏小**，前后端会各挂一条同口径警示（详见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.10 与 §7.4）。
 - **空结果不是异常**：官方 FAQ 2536 明确地点检索接口会过滤掉部分数据，因此**圈内计数可能被系统性低估**。这是官方预期行为，不是本接口缺陷；`0` 应读作「检索未见」而非「绝对没有」。
 - **所有降级路径返回 200 + `degraded` + 可读文案**，不返 5xx（FR-403）。
 
@@ -470,6 +473,8 @@ PRD §4.3 的权重表是 **20+15+20+15+15+10 = 95 %**，而 §4.5 的等级线 
 
 判定粒度是 **`subcat` 而非维度**：药店属于 `medical` 维度，而该维度还含综合医院/诊所——**整维度非空不等于有药店**。
 
+> ⚠️ **FR-104 的类别多选会污染这一层口径**。三个主判定 `subcat`（市场 / 药店 / 小学）分别住在 `market` / `medical` / `education` 三个维度里；取消其中任何一个维度，对应那类设施**根本没进本次 POI 集合**，而 `services/blind_spots.py` 的 `missing = required_subcats - hits` 分不出「没查到」和「没检索」。所以**盲区面积与「完全盲区」计数只可能偏大、不可能偏小**——实测：天坛在多个维度子集下 `area_pct` 恒为 28.4054（该点盲区与本维度无关），交道口只留 `medical` 时从 47.63 % 跳到 93.49 %。后端会在同一次响应的 `notes` 里挂一条同口径警示，前端在勾选变更时先说一次（另见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.10）。
+
 盲区判定 **0 次 API 调用**，完全复用已拉取的 POI 集合做本地球面距离（haversine）计算（决策 D5）。这是把盲区识别从 O(N×3) 次调用降到 0 次的核心优化。
 
 ### 7.5 命题「菜市场」→ 官方「市场」的映射（README 必须讲清）
@@ -528,7 +533,7 @@ PRD §10-6：**演示现场的网络状况无法提前得知**，因此必须准
 
 > ⚠️ **口径纪律**：断网时**地图不可用是官方架构决定的既成事实**（JSAPI 运行时与地图瓦片均由百度服务器动态下发，无法 vendored），不是工程缺陷。因此本项目**不承诺「断网也能演示地图」**——正确表述是「**断网演示 = 完整报告 + 图表 + 合成示意图**；地图演示需现场可访问 `api.map.baidu.com`」。
 >
-> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（439 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
+> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（451 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
 
 ---
 
@@ -664,9 +669,15 @@ python tools/gen_samples.py --check     # 零出网校验清单与基线一致
 | 双指缩放 | **未在真机验证**——代码只实现滚轮缩放（`wheel`，`passive:false`），**未见 pinch 处理**，触摸屏可能无法缩放 |
 | iOS Safari 滚动穿透 / 100vh 地址栏抖动 | **未在真机验证** |
 
-DevTools 模拟能覆盖的部分（两档视口 375×667 / 414×896、无横向滚动、无元素重叠、点击热区 ≥ 44 px、抽屉可展开收起、自动走 FR-107 轻量档）已按 §6.3 验收；上述三项在验收文档中**标注为「未在真机验证」而不是打勾**。
+> 🔴 **这一节此前把 FR-106 写成「已按 §6.3 验收」，是不实陈述，现已更正**。真实的代码状态是：
+>
+> * **底部抽屉未实现**。`≤ 768 px` 时参数面板与报告只是**单栏堆叠**（`isochrone.css` 的 1100 px / 480 px 两个断点 + `report.css` 的 768 px 断点），不会浮成可拖拽展开/收起的抽屉，地图也**不占满首屏**——即 PRD §7「最小可演示集」里 M4b 的降级形态，而不是 FR-106 的达标形态。
+> * **两档视口走查没有留下可复现证据**。`docs/` 里搜不到 375×667 / 414×896 的任何截图或测量记录，所以「无横向滚动、无元素重叠」目前**只能算未验证的假设**，不能算验收项。
+> * **已落地的是**：点击热区 ≥ 44 px（`app.css` 给 `button` 的无条件 `min-height: 44px`，加上 `isochrone.css` 480 px 断点与 `report.css` 768 px 断点里的三处）与 FR-107 自动轻量档（`report.js:942` 用 `matchMedia("(max-width: 768px)")` 决定 `platform`，后端 `services/analysis.py:83-86` 据此把 K 从 12 降到 6 并跳过中点加密与耗时热力场，`tests/test_analysis_api.py::test_mobile_platform_halves_k_and_uses_lightweight_profile` 钉住）。
+>
+> 上表三项真机行为在验收文档里**标注为「未在真机验证」而不是打勾**；FR-106 补齐后，本节要一并回填 DevTools 两档的实测证据。
 
-工程上的降风险措施：触摸交互一律走 `pointer` 事件而非 `touch*` 分支、抽屉用手写 `transform` 而不引第三方滑动库、JSAPI 侧不依赖 `navigator.userAgent` 判断设备类型。**若评审现场可借到手机，这三项应当作口头演示而不是文档承诺。**
+工程上的降风险措施：触摸交互一律走 `pointer` 事件而非 `touch*` 分支、抽屉（实现时）用手写 `transform` 而不引第三方滑动库、JSAPI 侧不依赖 `navigator.userAgent` 判断设备类型。**若评审现场可借到手机，这三项应当作口头演示而不是文档承诺。**
 
 ### 10.4 🔴 报告图表用手绘 SVG，而非 PRD §5 写的 ECharts
 
@@ -696,19 +707,21 @@ ECharts 官方**只发整包**，没有「只含 radar + bar」的官方 thin bu
 
 | 文件 | 体积 |
 | --- | ---: |
-| `isochrone.js` | 90.5 KB |
-| `report.js` | 37.2 KB |
-| `isochrone.html` | 15.5 KB |
-| `isochrone.css` | 9.5 KB |
+| `isochrone.js` | 116.9 KB |
+| `report.js` | 46.7 KB |
+| `isochrone.html` | 19.1 KB |
+| `isochrone.css` | 11.2 KB |
 | `app.js` | 7.8 KB |
-| `report.css` | 6.1 KB |
+| `report.css` | 6.7 KB |
 | `app.css` | 3.6 KB |
 | `index.html` | 3.0 KB |
-| **合计** | **173.4 KB** |
+| **合计** | **215.0 KB** |
 
-实际占用仅为预算的 **35 %**，且**零 Vue、零 ECharts、零公网外链**（CI 有一条断言：静态 HTML 里出现 `http(s)://` 资源引用即失败）。
+实际占用仅为预算的 **43 %**（上表为 **2026-10-11** 按 `wc -c / 1024` 重测；本轮 FR-104 落地带来的增量是
+`isochrone.js` +4.6 KB、`isochrone.html` +2.9 KB、`isochrone.css` +0.6 KB、`report.js` +1.1 KB），
+且**零 Vue、零 ECharts、零公网外链**（CI 有一条断言：静态 HTML 里出现 `http(s)://` 资源引用即失败）。
 
-> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（27 例），它把 `web/report.js` 里 25 个 `getElementById("…")` 的 id 全部抠出来逐个断言页面里存在——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
+> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（31 例），它把 `web/report.js`（25 个）与 `web/isochrone.js`（58 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在，并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
 
 ### 10.5 🔴 前 K 实测用了分层选择，而非 §4.3 字面的全局最近 K
 

@@ -57,6 +57,13 @@ from services.blind_spots import (
 from services.coverage import K_DESKTOP, K_MOBILE, build_coverage
 from services.isochrone_geometry import IsochroneConfig, as_lnglat, distance_m, initial_bearing
 from services.isochrone_service import IsochroneService, SyntheticOracle, get_isochrone_service
+from services.poi_categories import (
+    ALL_DIMENSIONS,
+    BLIND_TRIO_DIMENSIONS,
+    BLIND_TRIO_SUBCATS,
+    DIMENSIONS,
+    SUBCAT_LABEL_CN,
+)
 from services.poi_search import PoiSearchService, get_poi_search_service
 from services.route_probe import BatchRecord, CellOutcome, MatrixProbeResult, ProbePoint
 from services.score import ScoreConfig, build_score_block, build_summary, load_score_config
@@ -501,6 +508,41 @@ async def run_analysis(
     )
     tally.add("blind_spots", blind_spots.get("usage"))
     notes.extend(blind_spots.get("notes") or [])
+
+    # 🔴 FR-104 的类别多选有一个必须挂出来的副作用：盲区主判定（FR-221）固定吃
+    #    `market / pharmacy / primary_school` 三个 subcat，而 `services/blind_spots.py`
+    #    只按「附近有没有命中」判缺失 —— 它分不清**「这次没查」和「查了没有」**。
+    #    少勾一个维度，盲区面积就凭空翻上去（实测：交道口只勾「基础医疗」时
+    #    47.63 % → 93.49 %，圈内一个设施没少）。产品口径是**放行任意子集、不静默补检索**
+    #    （补了会让 `place_calls` 和用户勾选的类别数对不上），代价就是这条 note 必须挂在报告里。
+    #    ⚠️ 文案写「只可能偏大、不可能偏小」而不是「一定偏大」：`missing = required − hits`，
+    #    去掉维度只会让 hits 变小、把「配套不足」的格子推进「完全盲区」，反向不可能。
+    #    剩下几类本身覆盖得足够密时，本次面积也可能与全选**完全相等**（实测：天坛口径下
+    #    `categories=["medical"]` 与全选的 `area_pct` 都是 28.4054）—— 那种情况偏量是 0，
+    #    但可比性依然没了。所以这条 note 是**口径声明**，不是「这次一定算错了」。
+    wanted_dims = {str(key) for key in (categories or ALL_DIMENSIONS)}
+    hurt_dims = sorted((set(ALL_DIMENSIONS) - wanted_dims) & set(BLIND_TRIO_DIMENSIONS))
+    if hurt_dims:
+        missing_subcats = sorted(
+            {
+                subcat
+                for key in hurt_dims
+                for subcat in (DIMENSIONS[key].get("subcats") or ())
+                if subcat in set(BLIND_TRIO_SUBCATS)
+            }
+        )
+        hurt_labels = "、".join(DIMENSIONS[key]["label"] for key in hurt_dims)
+        missing_labels = "、".join(
+            SUBCAT_LABEL_CN.get(subcat, subcat) for subcat in missing_subcats
+        )
+        notes.append(
+            f"本次按勾选只检索了 {len(wanted_dims & set(ALL_DIMENSIONS))}/{len(ALL_DIMENSIONS)} "
+            f"类设施，而被排除的「{hurt_labels}」里装着"
+            f"盲区主判定（FR-221）依赖的 {missing_labels}。"
+            "盲区层只看得见「附近没命中」，看不见「这一类这次没查」，所以**本次盲区面积与"
+            "「完全盲区」计数只可能偏大、不可能偏小，不能和全选七类的结果比大小**。需要可比口径时"
+            "把这几类勾回来重跑一次。"
+        )
 
     # ---- ⑤ 评分 + 摘要 ----------------------------------------------------------------
     emit("score")
