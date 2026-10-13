@@ -229,9 +229,9 @@ jobs:
             sleep 2
           done
           echo "--- /api/health ---"
-          curl -fsS http://127.0.0.1:8000/api/health | head -c 600; echo
+          curl -fsS http://127.0.0.1:8000/api/health | python -c 'import sys; print(sys.stdin.read()[:600])'
           echo "--- /api/samples ---"
-          curl -fsS http://127.0.0.1:8000/api/samples | head -c 300; echo
+          curl -fsS http://127.0.0.1:8000/api/samples | python -c 'import sys; print(sys.stdin.read()[:300])'
           echo "--- POST /api/analysis（mock）---"
           curl -fsS -X POST http://127.0.0.1:8000/api/analysis \
             -H 'content-type: application/json' \
