@@ -41,7 +41,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Query, Request
-from infra.baidu_client import TRANSPORT_UNKNOWN_STATUS, BaiduClient, BaiduResult
+from infra.baidu_client import TRANSPORT_UNKNOWN_STATUS, BaiduClient, BaiduResult, egress_snapshot
 from infra.config import (
     SERVICE_BUCKET_MAP,
     EffectiveDataMode,
@@ -1202,6 +1202,9 @@ def _build_payload(
         "server_ak_type": _server_ak_verdict(probe, states),
         # 浏览器端 AK 只能由前端加载 JSAPI 时验证（笔记 §4.2）：后端探不到就如实说探不到
         "browser_ak_type": "present_unverifiable" if settings.has_browser_ak else "not_configured",
+        # 出网资源现在到底几份（修「并发 12」那轮的哨兵）：`bindings` 冒出 4 就说明有新 service
+        # 在建自己的真实链路客户端；`built: false` 只是「还没人建过」，不是缺陷。
+        "egress": egress_snapshot(),
         "services_enabled": services_enabled,
         "quota_remaining": _quota_remaining(reports, usage),
         # ---- §4.6「启动探测即改默认模式」的结论 -------------------------------------
@@ -1314,6 +1317,7 @@ def _fallback_payload(settings: Settings, *, error: str) -> dict[str, Any]:
         "baidu_reachable": False,
         "server_ak_type": "unknown",
         "browser_ak_type": "unknown",
+        "egress": egress_snapshot(),
         "services_enabled": {},
         "quota_remaining": {},
         "data_mode": mode,

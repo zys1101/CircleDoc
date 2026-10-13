@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | --- | --- |
 | 文档定位 | PRD §9 交付物「对比测试报告」；对应 FR-405、FR-406、§6.1、§6.2 |
-| 最后更新 | 2026-10-11 |
+| 最后更新 | 2026-10-13 |
 | 测试命令 | `pytest -q`（零配置、零 AK、零真实出网） |
-| 结论 | **509 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
+| 结论 | **513 例全绿**，`ruff` / `black` 零告警；测试套件零真实出网、可全程离线复现 |
 
 ---
 
@@ -14,7 +14,7 @@
 **2026-10-10 起本项目已接入真实百度 AK**（服务端 + 浏览器端两类，配在 gitignored 的 `.env` 里）。
 所以这份报告现在有两类证据，**口径不同、不互相顶替**：
 
-* **`mock` 侧**：509 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
+* **`mock` 侧**：513 例单测与两套冒烟自测仍在**零配置、零 AK、零出网**下全程复现——这是 CI 的形态，
   也是本文 §1、§2、§3、§5 的主口径。
 * **`live` 侧**：§4.3 是一次**真实出网**的端到端实跑（三样例各一次），§6 的「JSAPI 实底图顶点点击」
   是另一次真实浏览器 + 真实出网的补验。§2.6 ~ §2.9 四个缺陷**只有在 live 下才暴露**——
@@ -51,11 +51,15 @@
 | `test_coord_param_table.py` | 13 | 接口 × 坐标参数名 × 坐标顺序常量表 | FR-406、R8 |
 | `test_health_contract.py` | 11 | `/api/health` 三个「数据模式」字段的位置与值域、零配置横幅、AK 不外泄 | §4.6、FR-404、FR-410 |
 | `test_cache_store_singleton.py` | 4 | 缓存单例口径唯一 | FR-402 |
-| **合计** | **509** | | |
+| `test_egress_sharing.py` | **4**（本轮新增，见 §2.21） | **出网资源是不是全进程一份**：① 三个默认服务单例形状的客户端必须落在**同一个** `Egress` 上（同一个 `rate_limiter` / `breakers` 对象、`shared is True`、`bindings ≥ 3`），同时反向钉住 **`mode_count` 仍是各自的**（`isochrone == 2`、`geo == 1`——合并出口不等于合并预算）；② 五种注入形态（`transport` / `http_client` / `clock` / `rate_limiter` / `base_url`）各自必须留在**私有出口**上，且共享出口 `bindings` 不因它们增长（否则 MockTransport 用例与 `/api/health` 的 FakeClock 探针会互相污染令牌桶）；③ **熔断是账号级而不是 client 级**：第一个 client 打满失败阈值后，第二个 client 的 `before_request("place")` 也必须 `.allowed is False`，而未被污染的 `"geocode"` 桶照常放行；④ **在途峰值真的被闸住**：3 个 client × 4 次请求 = 12 次全发出去（`total == 12`），但计数桩同时观测到 `peak ≥ 2`（证明断言非空转）且 `peak ≤ 3` | FR-401、FR-403、§4.4、§4.6、R5 同族 |
+| **合计** | **513** | | |
 
-耗时：**4.92 ~ 5.13 s**（同一轮 509 例，本机对**最终代码状态**连续五次实测，
-4.94 / 5.13 / 5.03 / 4.92 / 4.97 s，全 `exit=0`；`chrome-devtools` 与 node MCP 全程在线）。
-上一轮记录的 8.94 / 11.55 s **不是代码回归**而是后台负载：那次 `chrome-devtools` 浏览器与它的 node MCP 服务都在跑，
+耗时：**5.06 ~ 5.78 s**（同一轮 513 例，本机对**最终代码状态**连续五次实测，
+5.28 / 5.06 / 5.48 / 5.47 / 5.78 s，五连跑均报 `513 passed`；退出码另单独跑一次用
+`$?` 直接取，不经管道——**5.28 / 5.06 / 5.48 / 5.47 / 5.78 那一轮的 `exit=0` 是 `tr` 的**，
+不是 pytest 的，所以这条不能省）。`chrome-devtools` 与 node MCP 全程在线。
+上一轮记录的 4.92 ~ 5.13 s 与更旧的 8.94 / 11.55 s **不是代码回归**而是后台负载：8.94 那次
+`chrome-devtools` 浏览器与它的 node MCP 服务都在跑，
 纯 CPU 基准 `sum(range(10**7))` 同时段实测 0.644 s（正常量级的两倍），最慢单例
 `test_task_registry_is_bounded` 也从 0.68 s 涨到 1.9 ~ 2.3 s。本轮五次测量时浏览器 MCP
 **仍然在线**，所以那个区间只能说明「同一台机器同一份代码可以差 2.4 倍」，
@@ -87,12 +91,12 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 
 ---
 
-## 2. 开发过程中发现并修复的二十个真实缺陷
+## 2. 开发过程中发现并修复的二十一个真实缺陷
 
-这二十个都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
+这二十一个都**不是**通过 code review 发现的，而是「把服务层真正接上 API 并跑起来」
 「把 CI 脚本真的执行一遍」「在最小 DOM 打桩下真跑一遍绘制路径」
 「把移动端抽屉在 DevTools 里真拖一遍并量 `getBoundingClientRect`」
-「**配上真实 AK 跑一遍 live 全链路**」之后暴露的。
+「**配上真实 AK 跑一遍 live 全链路**」「**打开百度账号控制台看它眼里我们的并发是多少**」之后暴露的。
 其中 §2.6 ~ §2.9 四个**只在接入真实 AK 之后才可能出现** —— 在离线演示阶段，
 它们全都被「合成数据比真实数据更完整」这件事盖住了。
 §2.10 是**在真实浏览器里点出来的**：`node --check` 与 451 例单测全绿，全选态的提示文案
@@ -107,7 +111,10 @@ pydantic 的宽松模式会把 `true` 强转成 `1`，于是 `{"radius": true}` 
 一条是冒烟脚本中间多了一份 `process.exit`，让 5 条断言从建仓起就是不可达代码（输出稳定 15 项 OK、
 退出码 0，看着完全正常）；一条是导出反馈被门禁函数覆盖回默认文案，**只有真点一次、真读一次提示**才看得出来。
 §2.20 是**只有真实浏览器能看见的一类**：`#report` 在桌面三栏下被压成 300 px 窄条，自初始提交就存在，
-509 例单测、两套冒烟自测与 `node --check` 全都不读 CSS 布局，所以它躲过了前面每一条门禁。
+509 例单测（**那**一轮的数，本轮之后是 513）、两套冒烟自测与 `node --check` 全都不读 CSS 布局，所以它躲过了前面每一条门禁。
+§2.21 是**只有账号控制台能看见的一类**：README 写「`BAIDU_MAX_CONCURRENCY` 是在途上限」，
+可出网资源是**每个 `BaiduClient` 一套**、进程里有三个 client，实际并发 3 × 4 = 12、QPS 也乘三，
+连熔断器都按 client 计数而百度按 **AK** 计数——**513 例单测全绿拦不住一条对账号的错误承诺**。
 
 ### 2.1 `services/poi_search.py`：7 处协程未 `await`（会导致接口 500）
 
@@ -783,7 +790,7 @@ head sha `98b14781…`）：三个 job 全部 `completed / success`——
 | --- | --- |
 | `pytest tests/test_samples_baseline.py` | **1 failed**, 15 passed（`67.8 != 98.24`） |
 | `pytest tests/test_analysis_api.py tests/test_cache_store_singleton.py tests/test_samples_baseline.py` | 66 passed |
-| `pytest -q`（全量） | 509 passed |
+| `pytest -q`（全量） | 509 passed —— **该轮实测量**，§2.21 之后同一格是 513，这条顺序依赖**仍在、未修** |
 
 `test_cache_keys_ttl.py` + 基线**仍然红**，要 `test_analysis_api.py` **加上** `test_cache_store_singleton.py`
 才转绿 —— 所以真凶是**进程级缓存单例**：`run_analysis` 直接调用时用的是那时那刻的 store 单例，
@@ -811,6 +818,86 @@ head sha `98b14781…`）：三个 job 全部 `completed / success`——
 **修法没有一行级的**：要么给这条断言显式注入 `cache_enabled=False` 的 settings（与 `gen_samples.py` 同源，
 是最小改动），要么给 `run_analysis` 加一个「本次不许读缓存」的参数——两者都要重新对账 §6.1 那句
 「缓存命中下 100 % 可复现」的口径，属于产品判定而不是修 bug。
+
+### 2.21 🔴 出网资源按 client 复制：`BAIDU_MAX_CONCURRENCY=4` 在真进程里是 **12**，熔断器看不见账号级限流（本轮修掉）
+
+**怎么暴露的**：2026-10-13 用户在百度账号控制台实拍「并发达到 12」，同时问「地图为什么还是离线底图、
+额度为什么在扣」。三个症状**只有一个**是缺陷，先把它们分开——这份文档里最容易混的一段就是这里：
+
+| 症状 | 结论 | 证据位置 |
+| --- | --- | --- |
+| 地图没有真实街道、只有示意 SVG | **不是 bug**：JSAPI 底图只能在**浏览器侧**拿到 browser 型 AK 时才挂载，后端只回 `has_browser_ak` 布尔、**不下发 AK**（本轮用户口径「浏览器端的 AK 不从后端下发」）。填法见 README §5 与 `#browser-ak` 输入框 | `api/health.py` 的 `has_browser_ak` / `browser_ak_type: present_unverifiable`，`web/isochrone.js` 的挂载分支 |
+| 百度额度在扣 | **不是 bug**：`.env` 是 `DATA_MODE=auto` + 真实服务端 AK，改中心点 → `/api/regeo`、点地图 → `POST /api/isochrone`、一键体检全是**真出网**；`CACHE_ENABLED=true` 只让**同参数第二次**免费 | 每份响应头都带 `X-Http-Requests` / `X-Place-Calls` / `X-Quota-Units`，见 `api/app.py:245-254` |
+| 控制台并发 = 12 | **是 bug，而且是承诺被架构违背**：README 与 `.env.example` 一直写「`BAIDU_MAX_CONCURRENCY` 是在途上限」，实际是**每个 client** 的上限 | 本节 |
+
+**根因**（一句话：一个账号被进程里的三个 client 各限了一次）。
+`infra/baidu_client.py` 里每构造一个 `BaiduClient`，就顺带新建**一整套**出网资源：
+`httpx.AsyncClient(Limits(max_connections=cfg.baidu_max_concurrency))`、一把
+`asyncio.Semaphore(同一个数)`、一个 `RateLimitRegistry`、一个 `BreakerRegistry`。
+而进程里有**三个**服务单例各建一个 client——`services/poi_search.py`、`services/geo.py`、
+`services/isochrone_service.py`。百度按 **AK** 统计 QPS 与在途并发，它不认我们进程里有几个 client：
+
+* 在途并发：`3 × 4 = 12`（控制台那个数）。
+* QPS：`RATE_PLACE_QPS=0.5` 变成最坏 **1.5**，`route` 2.5 变成最坏 7.5——比官方类目上限高一截。
+  **同族前例早已写在代码里**：`infra/ratelimit.py` 的 R5 注释——早期让步行 / 骑行各一个独立池、
+  各取 2.5 QPS，合计 5 QPS，跑 live 必然换回 `status=401`。这次是同一个坑换了个维度。
+* 最隐蔽的一条：**熔断器按 client 计数**。账号已经被限流时，client A 攒够连败把并发熔断打开，
+  client B 那侧计数器还是 **0**，于是继续发请求。也就是说 FR-401 的「连续失败保护」在多 client
+  进程里**基本没生效过**——它保护的是「某个 client 自己别撞墙」，而百度惩罚的是**账号**。
+
+**实测（假传输层计数桩，一次真实出网都没有）**：同一个实验、`BAIDU_MAX_CONCURRENCY=3`、
+3 个 client × 4 次并发 `geocode` = 12 个请求全部发出。
+
+| 形态 | 各 client 在途峰值 | **进程内峰值** | 发出总数 |
+| --- | --- | --- | --- |
+| 修前（3 套独立池 / 闸 / 桶 / 熔断） | 3 / 3 / 3 | **9** | 12 |
+| 修后（1 份进程级共享出口） | — | **3** | 12 |
+
+9 就是 `3 × 3`；把那个 3 换回 tracked 默认值 4，就是控制台实拍到的 **12**。
+两个数都在**当前代码**上复跑确认过（本轮第二次跑：`修前 3/3/3 → 9`，`修后 → 3`，`snapshot.bindings == 3`）。
+
+**修法：`Egress` —— 进程级共享出口**（`infra/baidu_client.py`）。一个 dataclass 装住
+`http`（连接池）、`rate_limiter`（桶）、`breakers`（熔断）、`max_concurrency` 与在途闸，
+`get_egress(cfg)` 保证同指纹全进程只有一份；三个服务单例的客户端从此落在同一份上。
+配套的四个口子：`egress_snapshot()`（可观测）、`close_egress()`（收尾关池）、`reset_egress()`（测试用）、
+`_egress_fingerprint(cfg)`（并发数或超时变了就重建、旧的记进 `stale`，不让池形状被静默复用）。
+
+**共享的判据是「什么都没注入才共享」**，不是默认全员共享。注入 `transport` / `http_client` /
+`rate_limiter` / `breakers` / `clock` / `sleep` / `metrics` / 非默认 `base_url` 任一项 → 走**私有出口**。
+这条边界不是为了好看：MockTransport 用例不能被真实桶拖住，而 `/api/health` 的探测是
+**假时钟 + 真桶**的形状——假时钟一旦进真实桶，补令牌算术会被打乱（`elapsed` 算出来是 0 或负）。
+所以 `api/health.py` 的 `_probe_client` 保持注入，它是共享出口的**例外**而不是漏网。
+
+三个刻意的「没合并」：
+
+* **`mode_count` 仍是 per-client**。`isochrone` 是 2（步行 + 骑行双模式，FR-206 的路线预算要按两份折算）、
+  `geo` 是 1。**合并出口不等于合并预算**——把预算也合成一份会让双模式那条守卫松掉。测试①里
+  用对象同一性钉住了这个差别（同一个 `Egress`、不同的 `mode_count`）。
+* **在途闸按事件循环各建一把**。`asyncio.Semaphore` 在首次 `await` 时就绑死所在 loop，
+  跨 loop 复用会 `RuntimeError`；所以 `_gates` 是 `weakref.WeakKeyDictionary`（loop → 闸），
+  不在 loop 里时退到 `_detached_gate`。httpx 那个池仍只有一份——**单事件循环**是本项目的运行假设，
+  写进了注释。
+* **`close_egress()` 放在 `api/app.py` 的 lifespan 收尾**，不放在任何 service 的 `aclose()` 里：
+  三个 client 共用一份出口，**谁都不是最后一个用完的人**，放在任意一个 service 上都会提前把池关掉。
+
+**改完之后要让非开发者也能自查**：`/api/health` 顶层多了 `egress` 块（`_fallback_payload` 里也有，
+降级态同样可查）。本机起服务实测三段——刚起来是 `{"built": false}`；
+跑一次 `DATA_MODE=mock` 的一键体检（`request_id 1aa010e32bec4c5c`，响应头 `x-http-requests: 0`，
+即**一次都没出网**）变 `{"built": true, "bindings": 2}`；再打一次 mock 的 `/api/regeo` 变 `bindings: 3`。
+`bindings` 就是「挂到这份共享出口上的 client 数」，正常应为 `poi_search` / `geo` / `isochrone` = 3。
+
+**配置**：`.env`（gitignored）把 `BAIDU_MAX_CONCURRENCY` 从 4 改成 **3**——按用户口径「并发上限 3 条」。
+tracked 的 `.env.example` 与代码默认值**保持 4**：共享闸让这个数**第一次真的等于账号级在途上限**，
+调它等于调对百度的压力，不该由我顺手改基线。
+
+**本轮新登记的代价（不是 bug，是没修的取舍）**：共享在途闸会带来**跨服务的队头阻塞**——
+一次等时圈的路线突发能把 3 个名额占满，此时一个 `/api/regeo` 得排队。登记在 §6，
+和「没做真正的请求队列」是同一条：FIFO + 背压会把 **FR-205 前端进度轮询**（任务 #17）
+从 P2 变成必做项，否则用户只看得到「转圈不动」。本轮按用户口径只做「共享出口 + 账号级熔断」两件事。
+
+**自测**：`tests/test_egress_sharing.py` 4 例（清单见 §1）。其中第④例带一条**反向断言**
+`spy.peak >= 2`：计数桩若因为签名对不上而在加载阶段就死，`peak == 0` 也会让 `peak <= 3` 绿——
+这正是 §2.11 那次「文档里的冒烟数字是假的」的同族坑，所以并发上限这类断言必须同时钉「它真的发生过」。
 
 ---
 
@@ -1149,6 +1236,8 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 | ✅ ~~桌面三栏下 `#report` 被栅格挤成 300 px 宽~~ **2026-10-11 已修**（§2.20） | 1280×800 实测：`.layout` 是三列（`300px 540.8px 360px`），`#report` 是第 4 个自动放置的子项，落到**第 2 行第 1 列**，宽度被 `minmax(260px, 300px)` 钉死。自**初始提交 `f24a174`** 就存在（上一轮这里写的 `7cee8f8` 是 10-11 的一个修复提交，不是起点——本轮 `git log --reverse -- web/isochrone.css` 实测首条就是 `f24a174`） | 改前 / 只加一条 / 两条都加**三态在同一份数据、同一个 `request_id` 上实测**：面板 300 → 1225 宽、高 10 250 → 3 644，雷达 280×280 → 589×589 → **320×320**（只加 `grid-column` 会让它涨过口径，所以 `.chart` 的上限是必需的另一半），柱状 280 → 520×260，POI 行高 79 → 26，`.table-wrap` 从 `270 / 600`（要横滚）变成 `1195 / 1195`。复测 769 / 1082 / 1122 / 1280 四档 + 375 抽屉无回归；1082 那档证明这条规则在单列区间是 no-op。三条静态断言进 `test_web_smoke.py`，四条「改坏」实测都能测红。逐条见 `docs/shots/README-isochrone-acceptance.md` 的「桌面报告版式与评分卡」一节 |
 | 🔴 **新发现，未修**：`data_mode=mock` 到底该不该读本地缓存，是个**产品口径**问题 | `poi_search._resolve_dimension`（与 `geo.py` 同一层）在进 mock 分支**之前**先读一次本地 SQLite，所以「mock」只保证不出网、不保证「只用合成数据」。本轮就在真实浏览器里被它咬了一次：旧 8806 服务上同一份报告 67.8 C，`CACHE_ENABLED=false` 起服务后 98.2 A（§2.7 的复发，基线生成器早就关了缓存，**只有运行期这条路没关**） | 现在靠**文档口径**兜（README §10.4 第 3 步、本文 §7 第 5c 步都写明要 `CACHE_ENABLED=false`），代码语义未动。真要改是二选一：① mock 层跳过缓存读（那 `cache` 模式与 `mock` 的边界要重写，且 `test_cache_keys_ttl.py`（86 例）与 `test_cache_store_singleton.py`（4 例）的口径要跟着对账）；② 保持读缓存，但报告里把「本次混入了 N 条缓存中的真实数据」写进 `meta`/`notes`（**这条更轻**，但要多一个「缓存命中的是不是 live 数据」的判定）。按配额纪律与「不静默改结论口径」两条，**这一轮两个都没做**，登记为待决策 |
 | 🔴 **新发现，未修**：基线可复现那条断言**绿得依赖测试顺序** | `pytest tests/test_samples_baseline.py` 在这台带脏缓存的机器上**必红**（`assert 67.8 == 98.24`），`pytest -q` 全量**却绿**；实测要 `test_analysis_api.py` + `test_cache_store_singleton.py` 同时在前才转绿，只加 `test_cache_keys_ttl.py` 不转（§2.20 末那张三行表） | 直接后果是**「509 例全绿」不能当成「基线可复现」的证据**——它只证明「这个顺序 + 这个缓存状态下整条链路没崩」。CI 里两件事同时成立（无 `.env`、无 `data/cache.db`），所以 CI 的绿是真的；**开发机的绿是顺序给的**。临时口径：单跑基线文件时显式 `CACHE_ENABLED=false`（实测 16 passed；只压 `BAIDU_SERVER_AK=` 不压它照样红；`-o cache_db_path=` 压不掉，那是 pydantic-settings 读的）。真正的修法要么给这条断言注入 `cache_enabled=False` 的 settings（与 `gen_samples.py` 同源，最小改动），要么给 `run_analysis` 加「本次不许读缓存」的参数——两者都要重新对账 §6.1「缓存命中下 100 % 可复现」那句口径，属产品判定，**本轮没动** |
+| ✅ ~~🔴 **出网资源按 client 复制**：`BAIDU_MAX_CONCURRENCY` 名义 4、实际进程里 12，QPS 同样乘三，**熔断器按 client 计数所以账号级限流从来没被看见过**~~ **2026-10-13 已修**（§2.21） | 症状来自用户实拍百度账号控制台「并发达到 12」。根因在 `infra/baidu_client.py`：每个 `BaiduClient` 自带一套 httpx 池 / 在途闸 / `RateLimitRegistry` / `BreakerRegistry`，而进程里有 `poi_search` / `geo` / `isochrone` 三个服务单例各建一个 client。假传输层计数桩实测：cap=3 时修前三套独立 → **进程峰值 9（= 3 × 3）**，修后一份共享出口 → **峰值 3**，两次都是 12 个请求全发出 | 修法是进程级共享出口 `Egress`（池 + 桶 + 熔断 + 在途闸各一份），`/api/health` 新增 `egress` 块（`bindings` 从 `2` 涨到 `3` 是本机实跑的观察），`.env`（gitignored）把并发钉到 **3**、tracked 默认值保持 **4**。同轮把 README §4.3 / §4.4 那句错的口径改对了，并补 `tests/test_egress_sharing.py` 4 例 |
+| 🔴 **新登记，本轮不修**：共享在途闸带来**跨服务的队头阻塞** | 3 个名额现在全进程共用：一次等时圈的路线突发能把名额占满，此时一个 `/api/regeo` 得排队。这是「按 AK 计数」的必然代价，不是回归 | 未做**公平性**（没有按服务预留名额、没有优先级）。更彻底的方案是真正的请求队列（FIFO + 背压 + 可查排队位置），但那会把 **FR-205 前端进度轮询**（任务 #17）从 P2 变成必做项——否则用户只看得到「转圈不动」。本轮按用户口径只做「共享出口 + 账号级熔断」两件事，队列与进度条一起留给下一步 |
 | live 模式下 FR-221 盲区结论的**准确性** | `market` 系统性为 0，见 §4.4 | 盲区面积在 live 模式下**系统性偏大**，不能当成真实结论呈现；根因已定位在检索层，无 PRD 框架内的干净修法。**2026-10-10 定口径：接受并明示**（见 §4.4 末的决策段）——真实检索那一侧（`data_source = live` **与 `cache`**）的报告由后端 `notes` 自动带这条提示，`mock` 口径不受影响；`cache` 一起算的原因见 §2.9 |
 | `docker compose up` | 开发机没有 Docker，CI 用的是裸 `docker run` | `docker build` **已由 CI 真实执行并跑绿**（2026-10-07：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 → `/api/health` + `/api/samples` + `POST /api/analysis` 可服务）。**仍未验**：compose 的起停、以及 CI 没挂 `-v` 所以「Linux 宿主 UID 1000 对 `./data` 的写权限」这条在开发机上复现不出来 |
 | ~~🔴 **FR-106 底部抽屉：功能未实现**~~ | ✅ **2026-10-11 已实现并补验**，抽屉自身的两处缺陷见 §2.12，逐条测量见 `docs/shots/README-isochrone-acceptance.md` 的「FR-106 移动端底部抽屉」一节 | 这条 10-11 才登记为「未实现」，同日落地。PRD §6.3 的「两档视口 375×667 / 414×896 无横向滚动、无元素重叠」现在**有可复现的测量记录了**（`scrollWidth / clientWidth` 两档都是 375/375 与 414/414，逐元素热区 ≥ 44 px）。**仍未验**的是真机手感那三项（下一行）——抽屉能拖不等于手指好拖 |
@@ -1185,6 +1274,16 @@ PRD §9 要求本报告包含这一项。**诚实的回答是：本项目没有�
 #      单跑基线文件要显式压掉缓存，否则在脏缓存机器上是 1 failed / 15 passed：
 #      CACHE_ENABLED=false pytest tests/test_samples_baseline.py   # 实测 16 passed
 pytest -q
+
+# 1b) 出网资源是否全进程只有**一份**（§2.21；零真实出网，走假传输层计数桩）
+#     这一支不读 .env、不碰 data/cache.db，单独跑也稳定绿；**在修之前的代码上第④例必红**
+#     （三套独立闸 → 在途峰值 9 > 上限 3）
+pytest tests/test_egress_sharing.py -q                       # 4 passed
+#     运行期自查（不用读代码）：/api/health 顶层的 egress 块
+#       刚起服务        → {"built": false, ...}
+#       一次体检之后    → {"built": true, "bindings": 2, "max_concurrency": 3, "stale": 0}
+#       再打一次 regeo → {"built": true, "bindings": 3, ...}   ← 3 = poi_search / geo / isochrone
+curl -s http://127.0.0.1:8000/api/health | python -c "import json,sys;print(json.load(sys.stdin)['egress'])"
 
 # 2) 词表自检（官方 POI 分类表逐词核对）
 python -c "from services.poi_categories import assert_wordlist; assert_wordlist()"
@@ -1271,7 +1370,7 @@ CI 本来就没有 `.env`，这条改动对它无感；2026-10-10 复跑 `m1` 35
 | `test_web_smoke.py` 例数 | `pytest -q --collect-only tests/test_web_smoke.py` | **62**（`62 tests collected in 0.29s`） | 27 → 18（README §10.4 曾写）→ FR-104 补到 31 → FR-106 补到 39 → FR-107 补到 41 → FR-103 补到 45 → FR-108 补到 51 → FR-413 新增 3 例到 54 → FR-305 新增 5 例（按钮接线与提示顺序 / 合规文案单一来源 / 不碰底图画布 / CJK 光栅化 / 卡片文字色对比度重算）到 59 → **本轮桌面版式 +3 例（栅格整行 / 图表上限只绑抽屉断点 / 评分卡渐变两端 × 三档文字色重算）到 62** |
 | `test_geo_api.py` 例数 | `pytest -q --collect-only tests/test_geo_api.py` | **27**（本轮未动，复测确认） | FR-103 那轮新增文件（16 例）→ **FR-108 那轮 +11 例 `/api/suggest`**：`/api/suggest` 此前同样**没有任何接口级用例**，只在启动探测里被间接触碰 |
 | `test_health_contract.py` 例数 | 同上换成该文件 | **11** | 本文 §1 表写 10（一轮重算合计时暴露，已就地改成 11） |
-| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **509**（桌面版式落地后对最终代码状态连续五次 `exit=0`，4.94 / 5.13 / 5.03 / 4.92 / 4.97 s）<br>🔴 **但这个绿不代表基线可复现**：同一棵树上 `pytest tests/test_samples_baseline.py` **单独跑必红**（`assert 67.8 == 98.24`），全量绿是靠前面的文件替换了进程级缓存单例（§2.20 末三条命令的实测表）。CI 那侧没有这个污染源（仓库不签入 `data/cache.db`，`infra/cache_store.py` 头注释第 3 条「镜像内不得预置任何 `.db`」+ 惰性建库；**这是按代码与仓库内容推的，本轮没在 CI 上实测这一条**） | 451 → FR-106 后 459 → FR-107 补 2 例到 461 → FR-103 补 20 例（16 + 4）到 481 → FR-108 补 17 例（11 + 6）到 498 → FR-413 新增 3 例到 501 → FR-305 新增 5 例到 506 → **本轮桌面版式新增 3 例到 509** |
+| 全量单测 | `./.venv/Scripts/python.exe -m pytest -q` | **513**（共享出口落地后本机实测 5.06 ~ 5.78 s 五连跑均报 `513 passed`，退出码单独取一次 = 0）<br>🔴 **但这个绿不代表基线可复现**：同一棵树上 `pytest tests/test_samples_baseline.py` **单独跑必红**（`assert 67.8 == 98.24`），全量绿是靠前面的文件替换了进程级缓存单例（§2.20 末三条命令的实测表）。CI 那侧没有这个污染源（仓库不签入 `data/cache.db`，`infra/cache_store.py` 头注释第 3 条「镜像内不得预置任何 `.db`」+ 惰性建库；**这是按代码与仓库内容推的，本轮没在 CI 上实测这一条**） | 451 → FR-106 后 459 → FR-107 补 2 例到 461 → FR-103 补 20 例（16 + 4）到 481 → FR-108 补 17 例（11 + 6）到 498 → FR-413 新增 3 例到 501 → FR-305 新增 5 例到 506 → 桌面版式新增 3 例到 509 → **共享出口（§2.21）新增 4 例到 513** |
 | `web/` 八个静态文件合计体积（PRD §5 的 500 KB 预算） | `wc -c web/* \| tail -1` → 本轮 **`278 583 total`**（⚠️ 别再手写 `wc -c web/* \| awk '{s+=$1} END{…}'`：`wc` 多文件时**自己就带一行 total**，那样是把它加了两遍，实返 **540.4 KB**，比真实值大一倍——本轮就这么错过一次） | **278 583 字节 = 272.1 KB = 预算的 54 %**（本轮 +1 905 字节：`isochrone.css` 21.1 → **21.7 KB**、`report.css` 7.3 → **8.7 KB**，其余六个文件一个字节没动） | 🔴 README §10.4 那张表停在 **235.7 KB / 47 %**，是 FR-106/107 那轮量的；后面四轮（FR-103 / FR-108 / FR-413 / FR-305）一直在往同一批文件里加代码，**谁都没回来改这个数**。差额 34.5 KB 里 `isochrone.js` 15.1 KB、`report.js` 12.9 KB。结论（远未超预算、零第三方资源）没变，但数字必须重测才能写 |
 
 **本轮新增的纪律：复核命令要连着看退出码，还要拿「应该有多少条」去对账。** `grep -c 'OK '` 在崩溃的

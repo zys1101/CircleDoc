@@ -8,7 +8,7 @@
 | 技术栈 | Python 3.11 + FastAPI 后端 · 零构建链原生 HTML/CSS/JS 前端 · SQLite 运行时缓存 · Docker 一键部署 |
 | 地图依赖 | 百度地图开放平台 Web 服务 API + JSAPI 4.0（浏览器端，按需动态注入、可降级） |
 | 事实依据 | 配额、接口路径、参数名、状态码、条款判定**一律以 [`docs/BAIDU_API_NOTES.md`](docs/BAIDU_API_NOTES.md) 为唯一出处**（2026-10-04 逐接口核验官方文档所得）；架构与需求见 [`PRD.md`](PRD.md) |
-| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（509 例单测 + 对比实验 + 诚实登记的未验证项） |
+| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（513 例单测 + 对比实验 + 诚实登记的未验证项） |
 | 部署细节 | [`tools/README-deploy.md`](tools/README-deploy.md)（Dockerfile / compose / run 脚本的设计取舍） |
 | 开源协议 | [Apache License 2.0](LICENSE) |
 | 最后更新 | 2026-10-11 |
@@ -118,7 +118,7 @@ python -m venv .venv
 ### 2.4 本地校验（零 AK、零出网）
 
 ```bash
-pytest -q                                              # 509 例（实测，零配置 / 零 AK / 零出网）
+pytest -q                                              # 513 例（实测，零配置 / 零 AK / 零出网）
 python -c "from services.poi_categories import assert_wordlist; assert_wordlist()"
 python tools/gen_samples.py --check                     # 合成样例基线校验
 ruff check . && black --check .                         # 零告警
@@ -131,7 +131,7 @@ node tools/map_layers_smoke.mjs _map_input.json         # 地图两个叠加图�
 > 另外 Windows 上请用 `./.venv/Scripts/python.exe -m pytest`：直接敲 `pytest` 会落到没装 `fastapi` 的解释器上，
 > 整个文件在**收集阶段**就报错、一个用例都不跑。
 
-🔴 **但「509 例全绿」不代表基线可复现**（2026-10-11 实测，登记为未修）：在跑过 live、
+🔴 **但「513 例全绿」不代表基线可复现**（2026-10-11 实测，登记为未修）：在跑过 live、
 `data/cache.db` 里留着真实 POI 的开发机上，`pytest tests/test_samples_baseline.py` **单独跑必红**
 （`assert 67.8 == 98.24`，就是上面第 3 步那对污染数字），全量跑却是绿的——因为排在它前面的文件
 替换了进程级缓存单例。三条对照命令与机理写在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.20 末。
@@ -219,7 +219,7 @@ CI 那侧没有这个污染源（仓库不签入 `data/cache.db`、缓存库惰�
 | `BAIDU_ALLOWED_HOSTS` | `api.map.baidu.com` | 只允许白名单域名，防 SSRF |
 | `BAIDU_CONNECT_TIMEOUT_S` | `5.0` | 连接超时 |
 | `BAIDU_READ_TIMEOUT_S` | `12.0` | 读取超时 |
-| `BAIDU_MAX_CONCURRENCY` | `4` | 同时在途请求上限。刻意低于官方并发口径，因为超限的表现是 body 里的 `status=401`，**不是 HTTP 429** |
+| `BAIDU_MAX_CONCURRENCY` | `4` | **全进程**同时在途请求上限。刻意低于官方并发口径，因为超限的表现是 body 里的 `status=401`，**不是 HTTP 429**<br>🔴 2026-10-13 之前这条是假的：闸、连接池、令牌桶、熔断器都建在 `BaiduClient` 上，而进程里有 `poi_search` / `geo` / `isochrone` 三个 client，最坏 **3 × 4 = 12** 条在途——用户百度控制台实拍到的那个 12 就是这个乘号。现在四类账号级资源收进一份进程级共享出口（`infra/baidu_client.py` 的 `Egress`），写 4 就是 4；`tests/test_egress_sharing.py` ④ 钉住它。代价：三个服务共用同一批在途名额，route 的慢请求会让 place 排队（原来三份闸时不会），要放宽就调这个值。**自查不用读代码**：`GET /api/health` 顶层有 `egress` 块，`max_concurrency` 是闸的位数、`bindings` 是挂在共享出口上的客户端数（正常终值 `3` = `poi_search` / `geo` / `isochrone`；长期停在 `1` 说明某个服务还在自建私有出口） |
 
 ### 4.4 令牌桶（按服务分桶）
 
@@ -234,6 +234,10 @@ CI 那侧没有这个污染源（仓库不签入 `data/cache.db`、缓存库惰�
 
 > 🔴 `rate` 一律**低于**官方 3 QPS 留余量；`burst` 必须 **≤ `rate`**——桶满时一次放行多个并发必然触发 `status=401`。
 > ⚠️ 上表是 PRD §4.6 的**建议值**，请以**你账号控制台的实际档位为准**（笔记 §9.2-①）。
+> ⚠️ 这张表是**账号级**的：桶注册表全进程只有共享出口那一份（§4.3 末那条）。在此之前每个
+> `BaiduClient` 各建一份，`RATE_PLACE_QPS=0.5` 在账号侧实际能到 1.5——和 `split_route_by_mode`
+> 早期「walking / riding 各 2.5 QPS = 合计 5 QPS」是同一个错误形状（`infra/ratelimit.py` 头注释 R5）。
+> 改了这些值要 `reload_settings()` + `reset_*_service()` 或重启进程才生效。
 
 ### 4.5 单次分析的出网预算（三栏分开）
 
@@ -580,7 +584,7 @@ PRD §10-6：**演示现场的网络状况无法提前得知**，因此必须准
 
 > ⚠️ **口径纪律**：断网时**地图不可用是官方架构决定的既成事实**（JSAPI 运行时与地图瓦片均由百度服务器动态下发，无法 vendored），不是工程缺陷。因此本项目**不承诺「断网也能演示地图」**——正确表述是「**断网演示 = 完整报告 + 图表 + 合成示意图**；地图演示需现场可访问 `api.map.baidu.com`」。
 >
-> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（509 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
+> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（513 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
 
 ---
 

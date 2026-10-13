@@ -323,6 +323,21 @@ PRD 第 269 行纠正过 v1.0 的一个乐观假设（按 5 km/h 估出 1.25 km 
 早期让 walking / riding 各建一个 2.5 QPS 独立池，合计 5 QPS > 官方「路线规划（合计类目）」的
 3 QPS，现场表现是 `status=401` 直到 `status=302` 全天封禁。现在两个模式桶是**同一个 route 父池
 的视图**，令牌、容量与排队锁都在父池上，「合计 ≤ rate」由**结构**保证而不是靠人记得除以 2。
+
+**🔴 同一个坑在「进程里有几个 client」这个维度上复发过一次，2026-10-13 修掉**。桶的**份数**也是
+账号级的：早期每个 `BaiduClient` 自带一个 `RateLimitRegistry`，而进程里有 `poi_search` / `geo` /
+`isochrone` 三个服务单例各建一个 client，于是 `RATE_PLACE_QPS=0.5` 实际最坏 **1.5**、在途并发
+`BAIDU_MAX_CONCURRENCY=4` 实际最坏 **12**——**和上面那条 R5 是同一个形状**：我们自己数了几份资源，
+而百度只数一个 AK。现在四类账号级资源（httpx 连接池、在途闸、桶注册表、熔断器注册表）收在
+`infra/baidu_client.py` 的进程级共享出口 **`Egress`** 上，`get_egress(cfg)` 按配置指纹只建一份。
+共享的判据是「**什么都没注入才共享**」：注入 `transport` / `http_client` / `clock` / `sleep` /
+`rate_limiter` / `breakers` / `metrics` / 非默认 `base_url` 任一项就走私有出口——
+MockTransport 用例不能被真实桶拖住，`/api/health` 的探测是**假时钟**、假时钟进真实桶会把补令牌
+算术打乱。**没合并的那一半**：`mode_count` 仍是 per-client（等时圈是 2、地理编码是 1），
+**合并出口不等于合并预算**，FR-206 双模式的路线额度守卫靠这个差别才没被松掉。
+代价说清楚：一份在途闸意味着**跨服务的队头阻塞**（route 的慢请求会让一个 `regeo` 排队），
+这是「按 AK 计数」的必然结果，登记在 `docs/TEST_REPORT.md` §6。钉住它的四例在
+`tests/test_egress_sharing.py`，其中在途峰值那条同时断言 `peak ≥ 2`，防止桩件早死造成假绿。
 `RateLimitRegistry.rate_warnings` 会把「同一官方档位下的独立池速率之和越界」如实报出来。
 
 **⚠️ 一处刻意的口径冲突**：PRD §4.6 正文要求 `burst ≤ rate`，但它自己给的表里

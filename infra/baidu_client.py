@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import weakref
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -46,7 +48,12 @@ __all__ = [
     "BAIDU_BASE_URL",
     "BaiduClient",
     "BaiduResult",
+    "Egress",
     "RouteMatrixResult",
+    "close_egress",
+    "egress_snapshot",
+    "get_egress",
+    "reset_egress",
     "to_baidu_latlng",
 ]
 
@@ -334,6 +341,187 @@ class _SendOutcome:
     transport_error: httpx.TransportError | None = None
 
 
+# --------------------------------------------------------------------------------------
+# 进程级共享出口：连接池 / 在途闸 / 令牌桶 / 熔断器，全进程各一份
+# --------------------------------------------------------------------------------------
+
+
+@dataclass
+class Egress:
+    """一份连接池 + 每循环一个在途闸 + 一份令牌桶注册表 + 一份熔断注册表。
+
+    🔴 为什么这四样必须全进程只有**一份**：它们管的是**账号级**的事实。百度按 AK 统计 QPS 与
+    在途并发，超限回 `status=401`、当日配额耗尽回 `4` / `302`，它完全不知道我们进程里有几个
+    `BaiduClient`。此前每个 client 各建一套——`services/poi_search.py` / `services/geo.py` /
+    `services/isochrone_service.py` 三个服务单例就是三套——于是 `.env` 写 `RATE_PLACE_QPS=0.5`
+    账号侧实际能到 1.5，`BAIDU_MAX_CONCURRENCY=4` 实际最坏 12 条在途（2026-10-13 用户控制台
+    实拍到的那个 12 正是 3 × 4）。同一个错误形状在 route 桶上已经修过一次
+    （`infra/ratelimit.py` 模块注释第 12 行的 R5：walking / riding 各建独立池 = 合计 5 QPS，
+    跑 live 必吃 401），这一轮是把「合计不许超」做到进程边界上。
+
+    `shared=False` 的私有出口留给**注入了假时钟 / 假 transport / 假 base_url 的客户端**
+    （单测与 `/api/health` 探测）。它们不能和真实链路共用一份桶：`FakeClock` 会把真实桶的
+    补令牌算术打乱——`infra/ratelimit.py` 里「睡了但时钟没走」那条报错就是为这个准备的。
+    """
+
+    http: httpx.AsyncClient
+    rate_limiter: RateLimitRegistry
+    breakers: BreakerRegistry
+    max_concurrency: int
+    fingerprint: tuple[Any, ...]
+    shared: bool
+    owns_http: bool
+    bindings: int = 0
+    """累计有多少个 `BaiduClient` 绑到这份出口上（只用于 `/api/health` 回显与自测断言）。"""
+
+    _gates: weakref.WeakKeyDictionary = field(default_factory=weakref.WeakKeyDictionary)
+    _detached_gate: asyncio.Semaphore | None = None
+
+    def gate(self) -> asyncio.Semaphore:
+        """当前事件循环的在途闸。
+
+        为什么按循环各分一份：`asyncio.Semaphore` 一旦在某个循环里等过，换另一个循环再等会抛
+        「bound to a different event loop」。自测里每个 `TestClient` / `asyncio.run` 都是新
+        循环，共享出口若只配一个信号量，第二份测试就红——那是新引入的回归，不是修 bug 的代价。
+        真实部署只有一个 uvicorn 循环，所以「每循环 ≤ N」与「全局 ≤ N」在这里同值。
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 不在循环里（同步构造、读快照）：给一个惰性闸，等它真进循环时再绑定。
+            if self._detached_gate is None:
+                self._detached_gate = asyncio.Semaphore(self.max_concurrency)
+            return self._detached_gate
+        gate = self._gates.get(loop)
+        if gate is None:
+            gate = asyncio.Semaphore(self.max_concurrency)
+            self._gates[loop] = gate
+        return gate
+
+    async def aclose(self) -> None:
+        """关连接池。注入进来的池（`owns_http=False`）归调用方管，与 `BaiduClient` 同口径。"""
+        if self.owns_http:
+            await self.http.aclose()
+
+
+_EGRESS_LOCK = threading.Lock()
+_egress: Egress | None = None
+_stale_egress: list[Egress] = []
+"""连接池形状变了（改超时 / 改并发上限后 `reload_settings()`）时换下来的旧出口。
+
+这里没有事件循环可以 `await`，所以不能就地关；攒着由 `close_egress()`（应用 shutdown）统一收。
+"""
+
+
+def _egress_fingerprint(cfg: Settings) -> tuple[Any, ...]:
+    """决定共享出口能否复用的那三个值。
+
+    只放**连接池形状**：并发上限与两种超时是建 `httpx.AsyncClient` 时就钉死的。限速与熔断
+    阈值不放进指纹——改它们不该重建连接池，且那两组值本来就要靠 `reload_settings()` +
+    `reset_*_service()` 或重启进程生效（README §4.8）。
+    """
+    return (
+        max(1, int(cfg.baidu_max_concurrency)),
+        float(cfg.baidu_connect_timeout_s),
+        float(cfg.baidu_read_timeout_s),
+    )
+
+
+def _build_egress(
+    cfg: Settings,
+    *,
+    shared: bool,
+    transport: httpx.AsyncBaseTransport | None = None,
+    http_client: httpx.AsyncClient | None = None,
+    rate_limiter: RateLimitRegistry | None = None,
+    breakers: BreakerRegistry | None = None,
+    clock: Clock | None = None,
+    sleep: Sleeper | None = None,
+    wall_clock: Callable[[], datetime] | None = None,
+) -> Egress:
+    """按 `cfg` 造一份出口。`shared=False` 时各参数原样生效，这就是测试隔离的那条路。"""
+    read_s = cfg.baidu_read_timeout_s
+    connect_s = cfg.baidu_connect_timeout_s
+    return Egress(
+        http=http_client
+        or httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(
+                read_s,
+                connect=connect_s,
+                read=read_s,
+                write=read_s,
+                pool=connect_s,
+            ),
+            limits=httpx.Limits(
+                max_connections=max(1, cfg.baidu_max_concurrency),
+                max_keepalive_connections=max(1, cfg.baidu_max_concurrency),
+            ),
+            follow_redirects=False,
+        ),
+        rate_limiter=rate_limiter or RateLimitRegistry(cfg, clock=clock, sleep=sleep),
+        breakers=breakers or BreakerRegistry(cfg, clock=clock, now=wall_clock),
+        max_concurrency=max(1, cfg.baidu_max_concurrency),
+        fingerprint=_egress_fingerprint(cfg),
+        shared=shared,
+        owns_http=http_client is None,
+    )
+
+
+def get_egress(cfg: Settings) -> Egress:
+    """进程级共享出口：真实默认链路上所有 `BaiduClient` 共用这一份。"""
+    global _egress
+    fingerprint = _egress_fingerprint(cfg)
+    with _EGRESS_LOCK:
+        if _egress is not None and _egress.fingerprint != fingerprint:
+            _stale_egress.append(_egress)
+            _egress = None
+        if _egress is None:
+            _egress = _build_egress(cfg, shared=True)
+            log_fields(
+                logger,
+                logging.INFO,
+                "egress_ready",
+                max_concurrency=_egress.max_concurrency,
+                shared=True,
+            )
+        _egress.bindings += 1
+        return _egress
+
+
+def egress_snapshot() -> dict[str, Any]:
+    """共享出口的现状，供 `/api/health` 与自测核对「现在到底几份」。"""
+    with _EGRESS_LOCK:
+        return {
+            "built": _egress is not None,
+            "bindings": _egress.bindings if _egress else 0,
+            "max_concurrency": _egress.max_concurrency if _egress else None,
+            "stale": len(_stale_egress),
+        }
+
+
+async def close_egress() -> None:
+    """关闭并丢弃共享出口与被换下来的旧出口（应用 shutdown、自测收尾）。
+
+    关掉之后 `_egress` 置空，下一次 `get_egress()` 重建一份——不会把已关闭的连接池留给后人。
+    """
+    global _egress
+    with _EGRESS_LOCK:
+        stale = list(_stale_egress)
+        _stale_egress.clear()
+        current, _egress = _egress, None
+    for item in (*stale, *([current] if current is not None else [])):
+        await item.aclose()
+
+
+def reset_egress() -> None:
+    """丢弃共享出口但**不关**连接池：给自测用，别让测试去 await 一个连接池。"""
+    global _egress
+    with _EGRESS_LOCK:
+        _egress = None
+        _stale_egress.clear()
+
+
 class BaiduClient:
     """百度 Web 服务异步客户端：令牌桶 → 熔断闸门 → 发送 → 按 body `status` 决策。"""
 
@@ -362,6 +550,14 @@ class BaiduClient:
 
         `mode_count` 是本次分析要跑的模式数（步行=1、步行+骑行=2）；`route` 与 `quota_units`
         预算要按它折算（`Settings.route_lines_budget`），否则双模式第二轮会被守卫误截。
+        🔴 它是**每个 client 各自**的属性，所以本方法不合并成一个全局 client，只合并下面这
+        四类账号级资源。
+
+        连接池、在途闸、令牌桶、熔断器取自进程级共享出口（`get_egress()`）——它们在百度那边
+        对应的是**同一个 AK 的配额与封禁状态**，各建一份等于把配置里的上限悄悄乘三。一旦传了
+        `transport` / `http_client` / `rate_limiter` / `breakers` / `clock` / `sleep` /
+        `metrics` 或改了 `base_url`，就改用私有出口，测试隔离与 `/api/health` 的假时钟探测
+        都不受影响（判据与理由见 `Egress` 的 docstring）。
         """
         self.settings = settings or get_settings()
         cfg = self.settings
@@ -372,29 +568,41 @@ class BaiduClient:
         self.mode_count = max(1, int(mode_count))
         self.cache = cache
 
-        self.rate_limiter = rate_limiter or RateLimitRegistry(cfg, clock=clock, sleep=self._sleep)
-        self.breakers = breakers or BreakerRegistry(cfg, clock=clock, now=wall_clock)
-
         self._explicit_metrics = metrics
-        self._owns_client = http_client is None
-        self._http = http_client or httpx.AsyncClient(
-            transport=transport,
-            timeout=httpx.Timeout(
-                cfg.baidu_read_timeout_s,
-                connect=cfg.baidu_connect_timeout_s,
-                read=cfg.baidu_read_timeout_s,
-                write=cfg.baidu_read_timeout_s,
-                pool=cfg.baidu_connect_timeout_s,
-            ),
-            limits=httpx.Limits(
-                max_connections=max(1, cfg.baidu_max_concurrency),
-                max_keepalive_connections=max(1, cfg.baidu_max_concurrency),
-            ),
-            follow_redirects=False,
+
+        # ---- 出网资源：默认共用进程级那一份出口；**任何注入**都退回私有出口。
+        # 判据里为什么连 clock / sleep / metrics 也算注入：这三个不碰连接池，却说明「这份客户端
+        # 活在假时钟 / 假计量世界里」。假时钟与真实链路共用一个令牌桶，桶的补令牌算术会凭空
+        # 错乱——`Egress` docstring 与 `infra/ratelimit.py` 的「睡了但时钟没走」就是这条保护。
+        injected = bool(
+            http_client is not None
+            or transport is not None
+            or rate_limiter is not None
+            or breakers is not None
+            or clock is not None
+            or sleep is not None
+            or metrics is not None
+            or self.base_url != BAIDU_BASE_URL
         )
-        # 在途请求上限。为什么还要一道：令牌桶管「每秒放行多少个」，不管「几个还挂在网上」。
-        # 百度读超时默认 12 s，2.5 QPS 下最坏情况能堆出 30 个在途请求，本机内存与连接都不够。
-        self._semaphore = asyncio.Semaphore(max(1, cfg.baidu_max_concurrency))
+        if injected:
+            self.egress = _build_egress(
+                cfg,
+                shared=False,
+                transport=transport,
+                http_client=http_client,
+                rate_limiter=rate_limiter,
+                breakers=breakers,
+                clock=clock,
+                sleep=self._sleep,
+                wall_clock=wall_clock,
+            )
+        else:
+            self.egress = get_egress(cfg)
+        self.rate_limiter = self.egress.rate_limiter
+        self.breakers = self.egress.breakers
+        self._http = self.egress.http
+        # 只有自己建的私有连接池才归本 client 关；共享出口由应用 shutdown 调 close_egress() 收。
+        self._owns_client = not self.egress.shared and self.egress.owns_http
 
         self.live_enabled = bool(self._ak)
         """False 时任何请求都不出网（无 AK / 启动探测判定不能实时），统一抛 typed error。"""
@@ -429,7 +637,11 @@ class BaiduClient:
 
     # ------------------------------------------------------------------ 生命周期
     async def aclose(self) -> None:
-        """关闭底层连接池；只关自己建的那个，注入进来的 `http_client` 归调用方管。"""
+        """关闭底层连接池；只关自己建的那个，注入进来的 `http_client` 归调用方管。
+
+        共享出口也不归这里管：三个服务共用一份，谁都不是最后一个用完的人，所以由应用
+        shutdown 调 `close_egress()` 统一收（`_owns_client` 对共享出口恒为 False）。
+        """
         if self._owns_client:
             await self._http.aclose()
 
@@ -496,7 +708,12 @@ class BaiduClient:
         }
 
     def stats(self) -> dict[str, Any]:
-        """限流 / 熔断 / 计量三件套的总览，供 `/api/health` 直接回显。"""
+        """限流 / 熔断 / 计量三件套的总览，供 `/api/health` 直接回显。
+
+        `egress.process` 是给运维看「现在到底几份出口」的：修好之后它应当恒为
+        `built: true, bindings: 3, stale: 0`。`bindings` 又冒出第四份就说明有新 service
+        在建自己的真实链路客户端。
+        """
         return {
             "live_enabled": self.live_enabled,
             "has_ak": self.has_ak,
@@ -505,6 +722,11 @@ class BaiduClient:
             "usage": self.usage(),
             "rate_limiter": self.rate_limiter.snapshot(),
             "breakers": self.breakers.snapshot(),
+            "egress": {
+                "kind": "shared" if self.egress.shared else "private",
+                "max_concurrency": self.egress.max_concurrency,
+                "process": egress_snapshot(),
+            },
         }
 
     # ------------------------------------------------------------------ 公开接口
@@ -940,7 +1162,7 @@ class BaiduClient:
         """真正发一次 HTTP 请求；**三栏计量只在这里累加**（没出网就不记账）。"""
         url = self._allowed_url(plan.path)
         label = self._meter_label(plan)
-        async with self._semaphore:
+        async with self.egress.gate():
             metrics = self.metrics
             metrics.add_http_requests(1, service=label)
             if plan.place_call:

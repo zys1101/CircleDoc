@@ -1392,6 +1392,102 @@ live 底图**没起来**，原因不是配置缺失而是**按约定就该由人
   **没有改任何行为代码**，所以门禁数字仍应是 509 passed / ruff clean / black 49 unchanged——
   跑一遍确认。
 
+## 共享出口与账号级熔断 · 并发 12 的根因实测（2026-10-13，零真实出网）
+
+用户报了三件事：地图还是离线底图、百度额度在扣、**控制台显示并发达到 12**。
+前两条是配置与口径（见下面第 4 节），第三条是缺陷，本轮修的是它。
+缺陷正文与根因分析在 `docs/TEST_REPORT.md` §2.21，这一节只放**实测记录**。
+
+### 1. 在途峰值：修前 9、修后 3（同一个实验，假传输层计数桩）
+
+`BAIDU_MAX_CONCURRENCY=3`，3 个 client × 4 次并发 `geocode` = 12 个请求，一次真实出网都没有。
+计数桩记录「同时在途的最大值」，脚本跑完即删（不进仓库）：
+
+| 形态 | 各 client 峰值 | **进程内峰值** | 发出总数 | 全部成功 |
+| --- | --- | --- | --- | --- |
+| 修前（每 client 一套池 / 闸 / 桶 / 熔断） | 3 / 3 / 3 | **9** | 12 | 是 |
+| 修后（进程级共享出口 `Egress`） | — | **3** | 12 | 是 |
+
+9 = `3 × 3`。把那个 3 换回 tracked 默认值 4 就是控制台实拍到的 **12**——**这次不是估算，是复现**。
+修后那一跑同时打印 `egress_snapshot()` → `{'built': True, 'bindings': 3, 'max_concurrency': 3, 'stale': 0}`，
+三个 service 客户端 `egress is egress` 为 `True`。
+
+### 2. `/api/health` 的 `egress` 块：三格真实观察值
+
+本机起服务（`DATA_MODE=mock`，**零出网**）逐段观察，非开发者也能自查：
+
+| 时机 | `egress` |
+| --- | --- |
+| 刚起服务、还没发请求 | `{"built": false, ...}` |
+| 跑一次 `POST /api/analysis`（`request_id 1aa010e32bec4c5c`，响应头 `x-http-requests: 0`） | `{"built": true, "bindings": 2, "max_concurrency": 3, "stale": 0}` |
+| 再打一次 `GET /api/regeo` | `{"built": true, "bindings": 3, ...}` |
+
+`bindings` 是「挂到这份共享出口上的 client 数」，正常终值 = 3（`poi_search` / `geo` / `isochrone`）。
+若它长期停在 1，说明某个服务仍在自建私有出口——那是回归信号，不是「没用上」。
+
+### 3. 熔断器现在是账号级的（这条此前**基本没生效过**）
+
+`tests/test_egress_sharing.py` 第③例：client A 把 `place` 桶的连败攒到阈值 →
+client B 的 `breakers.before_request("place").allowed` 也变成 `False`，而 `"geocode"` 桶照常放行。
+修之前每个 client 各有一本计数器，A 打开熔断时 B 那侧是 0，会继续往已被限流的账号上发请求。
+
+⚠️ **这一条是假故障注入**（`record_failure(..., transport=True)`），**不是**真实百度回 `status=401`。
+真账号上去撞 401 才能验「跨 client 拦得住」，但那要**故意把配额打爆**，按配额纪律本轮没做，
+所以它登记在下面的「未验」而不是「已验」。
+
+### 4. 前两条症状的结论：不改代码
+
+- **实时底图**：JSAPI 只在**浏览器侧**拿到 browser 型 AK 时才挂载（`localStorage circledoc.browser_ak`
+  / `#browser-ak` 输入框 / `?ak=`）。后端按约定**只回布尔、密钥值与 AK 本体一律不下发**，
+  本轮按用户口径「浏览器端的 AK 不从后端下发」**没有写任何下发代码**。
+  想看真实街道：把人手工填进 `#browser-ak` 即可，不用改代码。
+- **额度在扣**：`.env` 是 `DATA_MODE=auto` + 真实服务端 AK，改中心点 / 点地图 / 一键体检**都是真出网**；
+  `CACHE_ENABLED=true` 只让**同参数第二次**免费。判据看响应头 `x-http-requests`，别看地图栏那一格
+  （那一格在缓存命中时会误写「实时调用」，是 §6 已登记的未修项）。
+
+### 5. 配置与代价（说清楚换来了什么）
+
+- `.env`（**gitignored**）把 `BAIDU_MAX_CONCURRENCY` 从 4 改成 **3**，按用户口径「并发上限 3 条」。
+  tracked 的 `.env.example` 与 `Settings` 默认值**保持 4**：共享闸让这个数第一次真的等于账号级在途上限，
+  调它等于调对百度的压力，不该由我顺手改基线。
+- **换来的代价**：跨服务的**队头阻塞**——路线突发占满 3 个名额时，一个 `/api/regeo` 要排队。
+  没做公平性（未按服务预留名额、无优先级）。登记在 `docs/TEST_REPORT.md` §6。
+- **没做的事**：真正的请求队列（FIFO + 背压 + 排队位置可查）。它会把 **FR-205 前端进度轮询**
+  从 P2 变成必做项，否则用户只看得到「转圈不动」。本轮按用户口径只做「共享出口 + 账号级熔断」。
+
+### 6. 本轮**没有**验的（别当成已验）
+
+1. **真实 401 下的跨 client 熔断**——需要故意打爆配额，未做（见第 3 节）。
+2. **队头阻塞的墙钟代价**——只在假传输层（每次 20 ms）验了峰值 ≤ 3，没量过 live 下一次等时圈
+   会让 `/api/regeo` 慢多少毫秒。
+3. **多事件循环**：在途闸按 loop 各建一把（`weakref.WeakKeyDictionary`），单测与 uvicorn 都是单 loop；
+   「同一进程两个 loop 各跑一套请求」这条路径没实测过——它本来也不在部署形态里。
+4. **`docker compose up` / CI 下的 `egress` 块**：只在这台 Windows + `.venv` uvicorn 上观察过。
+
+### 7. 提交之前的门禁（本轮全部实跑）
+
+- `./.venv/Scripts/python.exe -m pytest -q` → **513 passed**（五连跑 5.28 / 5.06 / 5.48 / 5.47 / 5.78 s 均报
+  `513 passed`；退出码**单独**取一次不经管道 = `0`。⚠️ 上一版这里写的「全 `exit=0`」是从管道尾巴读的，
+  读到的是 `tr` 的退出码——那类假数字的教训见 `docs/TEST_REPORT.md` §2.11，本轮改掉了这个习惯）
+- `pytest tests/test_egress_sharing.py -q` → **4 passed in 0.43 s**，**exit=0**（单独跑也稳定，不读 `.env`、不碰缓存）
+- `ruff check .` → 零告警
+- `black --check .` → **50 files would be left unchanged**（上一轮是 49，新增的就是那个测试文件）
+- `node tools/report_dom_smoke.mjs` → **21 项 `OK` / 脚本里 21 条 `check(`**，尾行「全部通过」，退出码 **0**
+- `node tools/map_layers_smoke.mjs _map_input.json` → **12 / 12**，退出码 **0**
+  （桩按干净口径重新生成：`BAIDU_SERVER_AK= BAIDU_BROWSER_AK= CACHE_ENABLED=false DATA_MODE=mock`，
+  拿到的是基线那份 **98.24 / A**、`http_requests: 0`，不是脏缓存的 67.8 / 44 条）
+- QA 那两套冒烟（脚本**在仓库外**的 `swarm/`，故意不签入）：`m1_smoke.py` **35/35 passed**、
+  `m2_smoke.py` **102/102 passed**，退出码均 **0**，两套末尾都自带「🔴 全程零真实出网（守卫未触发）」
+- `python -c "from services.poi_categories import assert_wordlist; assert_wordlist()"`、
+  `python tools/gen_samples.py --check` → 均通过
+- **顺带留下的一条运行期证据**：上面那条干净桩生成命令的日志里第一行就是共享出口的建池记录——
+  `{"message": "egress_ready", "request_id": "bc3c0e8312274767", "max_concurrency": 3, "shared": true}`，
+  同一次请求 `place_calls: 0 / http_requests: 0`（**零出网**）。
+  `shared: true` 就是「这次用的不是私有出口」的直接记录；这条日志只在**建池那一次**打，
+  所以第二、三个 client 复用同一份时不再重复出现，正好对应 `egress_snapshot().bindings` 的递增。
+- 🔴 **上一轮那两条未修项这轮没碰**：`pytest tests/test_samples_baseline.py` 单独跑在这台脏缓存机器上
+  仍必红（`assert 67.8 == 98.24`），`data_mode=mock` 仍读本地缓存。共享出口与这两条无关，别混着签字。
+
 ## 未在真机验证清单（风险 R15 诚实登记）
 
 1. 手指惯性拖拽（pointer 事件在触摸屏上的动量续滚）——`isochrone.js:2032-2058` 只有 pointerdown/move/up，无惯性实现，真机手感未测。

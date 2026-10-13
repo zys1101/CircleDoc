@@ -25,6 +25,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from infra.baidu_client import close_egress
 from infra.config import Settings, get_settings
 from infra.errors import BreakerKind, CircleDocError, seconds_until_next_midnight
 from infra.log import (
@@ -309,6 +310,9 @@ async def report_lifespan(app: FastAPI) -> AsyncIterator[None]:
             hint="未配置 BAIDU_SERVER_AK：按零配置路径运行，实时调用会降级到合成数据。",
         )
     yield
+    # 收尾：关掉进程级共享出口的那份连接池。为什么放在这里而不是任何 service 的 aclose——
+    # `poi_search` / `geo` / `isochrone` 三个 client 共用同一份出口，谁都不是最后一个用完的人。
+    await close_egress()
 
 
 def register_routers(app: FastAPI) -> None:
