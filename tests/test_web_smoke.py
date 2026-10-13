@@ -75,7 +75,7 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 JS_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 JS_LINE_COMMENT = re.compile(r"(?m)^\s*//.*$")
 # --- FR-106 抽屉：把手条三个按钮 + 一根装饰性拖拽条，开合全靠 `data-sheet` ↔ 面板 id 的对应。
-SHEET_BAR = re.compile(r'<div class="sheet-bar" id="sheet-bar">(?P<body>.*?)</div>', re.DOTALL)
+SHEET_BAR = re.compile(r'<div class="sheet-bar" id="sheet-bar"[^>]*>(?P<body>.*?)</div>', re.DOTALL)
 DATA_SHEET = re.compile(r'data-sheet="([a-z]+)"')
 ARIA_CONTROLS = re.compile(r'aria-controls="([a-z]+)"')
 BREAKPOINT_DECL = re.compile(r"const SHEET_BREAKPOINT_PX = (\d+);")
@@ -144,6 +144,8 @@ def html_ids(path: Path) -> set[str]:
         "/app.css",
         "/isochrone.css",
         "/report.css",
+        "/workspace.css",
+        "/workspace.js",
     ],
 )
 def test_static_assets_are_served(client: TestClient, path: str) -> None:
@@ -673,24 +675,16 @@ def test_mobile_hit_areas_are_44px() -> None:
     assert "min-height: 44px" in band["body"]
 
 
-def test_mobile_head_yields_the_first_screen_to_the_map() -> None:
-    """页头 / 横幅在移动端必须压扁，而且只许藏标语，不许藏导航。
-
-    375×667 实测：按桌面板式是 `.page-head` 227 px + `.banner` 210 px，地图被顶出首屏。
-    压扁的方式有讲究 —— `.sub` 那句标语（「CircleDoc · 15 分钟生活圈体检助手」）是重复信息，
-    可以 `display: none`；同一段里的「← 返回首页」是手机上唯一的方向导航，
-    连它一起藏就是拿可用性换像素。
-    """
-    assert "display: none" in sheet_rule(".sub span")
-    assert "display: none" not in sheet_rule(".sub")
-    assert "padding" in sheet_rule(".page-head")
-    banner = sheet_rule(".banner")
-    # 横幅要封顶内部滚动，不能把地图顶下去。
-    assert "max-height" in banner and "overflow-y: auto" in banner
-    text = strip_html_comments(ISOCHRONE_HTML.read_text(encoding="utf-8"))
-    sub = re.search(r'<p class="sub">(?P<body>.*?)</p>', text, re.DOTALL)
-    # 返回首页链接不在 .sub 里，压缩规则就会把它一起藏掉。
-    assert sub and 'class="back"' in sub["body"]
+def test_mobile_workspace_uses_navigation_instead_of_stacked_drawers() -> None:
+    """移动端改用同一组独立页面，导航始终可达，不再把所有面板压在地图上。"""
+    css = (WEB / "workspace.css").read_text(encoding="utf-8")
+    html = strip_html_comments(ISOCHRONE_HTML.read_text(encoding="utf-8"))
+    js = strip_js_comments(ISOCHRONE_JS.read_text(encoding="utf-8"))
+    assert ".workspace .sheet-bar { display: none !important; }" in css
+    assert "position: sticky" in css
+    assert 'aria-label="工作台导航"' in html
+    assert 'href="./index.html"' in html
+    assert '!document.body.classList.contains("workspace")' in js
 
 
 def test_report_opens_the_panel_it_just_filled() -> None:

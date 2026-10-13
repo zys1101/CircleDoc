@@ -75,6 +75,8 @@
    * 一进页面就按时间重排，会把「同一维度的设施挨在一起」这个天然分组打散，反而更难读。
    */
   let sortState = { key: null, dir: "asc" };
+  const POI_PAGE_SIZE = 20;
+  let poiPage = 1;
 
   /** 明细表可排序列：`key` 对应 `web/isochrone.html` 表头上的 `data-sort`。 */
   const SORT_COLUMNS = {
@@ -539,12 +541,14 @@
     const ordered = sortRows(rows);
     const tbody = el.poiTable.querySelector("tbody");
     clear(tbody);
-    let inCount = 0;
-    ordered.forEach(({ group, poi }) => {
+    const inCount = rows.filter(({ poi }) => poi.in_polygon).length;
+    const pages = Math.max(1, Math.ceil(ordered.length / POI_PAGE_SIZE));
+    poiPage = Math.max(1, Math.min(poiPage, pages));
+    const start = (poiPage - 1) * POI_PAGE_SIZE;
+    ordered.slice(start, start + POI_PAGE_SIZE).forEach(({ group, poi }) => {
       const tr = node("tr");
       if (!poi.in_polygon) tr.className = "outside";
       if (poi.unmeasured) tr.classList.add("unmeasured");
-      if (poi.in_polygon) inCount += 1;
       tr.appendChild(node("td", null, poi.name || poi.uid || "—"));
       tr.appendChild(node("td", null, label(group.key)));
       tr.appendChild(node("td", "sub", poi.official_path || poi.subcat || "—"));
@@ -569,8 +573,11 @@
       ? `；已按「${SORT_COLUMNS[sortState.key].label}」${sortState.dir === "desc" ? "降序" : "升序"}排列（未实测的排在最后）`
       : "；点表头可按该列排序";
     el.poiCount.textContent = rows.length
-      ? `共 ${rows.length} 条（圈内 ${inCount} 条；仅返回第一页，不翻页）${sorted}`
+      ? `共 ${rows.length} 条（圈内 ${inCount} 条；地点检索仅取接口第一页，本地分页不追加请求）${sorted}`
       : "没有符合条件的设施记录。";
+    document.getElementById("poi-page").textContent = `第 ${poiPage} / ${pages} 页`;
+    document.getElementById("poi-prev").disabled = poiPage <= 1;
+    document.getElementById("poi-next").disabled = poiPage >= pages;
   }
 
   /** 把 `aria-sort` 与表头箭头刷成当前排序状态（无障碍：不能只靠一个箭头字符）。 */
@@ -599,6 +606,7 @@
     } else {
       sortState = { key, dir: "asc" };
     }
+    poiPage = 1;
     const groups = ((current || {}).coverage || {}).groups || [];
     renderPoiTable(groups);
   }
@@ -681,8 +689,10 @@
         const jump = node("button", "link-btn", "在地图上定位");
         jump.type = "button";
         jump.addEventListener("click", () => {
-          if (window.CircleDocMap && window.CircleDocMap.setCenter) {
-            window.CircleDocMap.setCenter(center, "盲区块几何中心");
+          // Locate the block without changing the analysis origin or invalidating its result.
+          if (window.CircleDocWorkspace) window.CircleDocWorkspace.navigate("map");
+          if (window.CircleDocMap && window.CircleDocMap.focusOn) {
+            window.CircleDocMap.focusOn(center);
           }
         });
         item.appendChild(jump);
@@ -767,6 +777,7 @@
 
   function renderReport(report) {
     current = report;
+    poiPage = 1;
     el.empty.hidden = true;
     el.body.hidden = false;
     renderBadge(report);
@@ -1396,6 +1407,7 @@
       if (window.CircleDocMap && window.CircleDocMap.openSheet) {
         window.CircleDocMap.openSheet("report");
       }
+      document.dispatchEvent(new CustomEvent("circledoc:analysis-complete"));
     } catch (error) {
       el.hint.textContent = `体检请求失败：${(error && error.message) || error}`;
     } finally {
@@ -1449,7 +1461,7 @@
         window.CircleDocMap.setCenter(lnglat, `样例：${option.textContent}`);
       }
       if (window.CircleDocMap && window.CircleDocMap.setRunHint) {
-        window.CircleDocMap.setRunHint(`已载入样例中心点，点「一键体检」开始。`);
+        window.CircleDocMap.setRunHint(`已载入样例中心点，点「生成完整体检报告」开始。`);
       }
     }
   }
@@ -1496,7 +1508,14 @@
         });
       }
     }
+    for (const [id, delta] of [["poi-prev", -1], ["poi-next", 1]]) {
+      document.getElementById(id).addEventListener("click", () => {
+        poiPage += delta;
+        renderPoiTable(((current || {}).coverage || {}).groups || []);
+      });
+    }
     el.poiCategory.addEventListener("change", () => {
+      poiPage = 1;
       // 只重画明细表：切筛选不该重画雷达与柱状图（那两张与筛选无关，重画纯属浪费）。
       const groups = ((current || {}).coverage || {}).groups || [];
       renderPoiTable(groups);

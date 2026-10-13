@@ -59,3 +59,6 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/settings.json
+
+# Local frontend validation tools and screenshots (not shipped)
+.cache/

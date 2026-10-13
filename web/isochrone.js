@@ -242,7 +242,7 @@ function renderCategoryHint() {
   let text;
   if (!on) {
     state = "none";
-    text = `已取消全部 ${total} 类：没有任何设施会被检索，点「一键体检」不会发请求。`;
+    text = `已取消全部 ${total} 类：没有任何设施会被检索，点「生成完整体检报告」不会发请求。`;
   } else if (hurt.length) {
     state = "hurt";
     text =
@@ -2464,7 +2464,7 @@ async function runIsochrone(request) {
           normalizeVertices(body).length
         } 个顶点）。当前显示：${MODE_LABEL[el.mode.value] || el.mode.value}。`,
         [`request_id：${body.request_id || requestId || "—"}`],
-        "把出行方式切回目标模式，或重新点「开始分析」。",
+        "把出行方式切回目标模式，或重新点「仅计算等时圈」。",
       );
       state.activeMode = el.mode.value;
       state.activeResult = state.results[el.mode.value] || null;
@@ -2504,6 +2504,7 @@ async function runIsochrone(request) {
     }
     renderAll(true);
     el.runHint.textContent = `完成：${MODE_LABEL[request.mode]} ${request.minutes} min（${response.status}）`;
+    document.dispatchEvent(new CustomEvent("circledoc:isochrone-complete"));
   } catch (error) {
     renderRequestFailure(null, { message: error && error.message }, "", request);
   } finally {
@@ -3065,7 +3066,10 @@ for (const sheet of sheetPanels) {
 }
 
 function syncSheetMode() {
-  const next = sheetQuery && sheetQuery.matches ? "mobile" : "desktop";
+  // The new workspace uses independent screens on mobile, not overlaid legacy drawers.
+  const next = !document.body.classList.contains("workspace") && sheetQuery && sheetQuery.matches
+    ? "mobile"
+    : "desktop";
   if (next !== sheetMode) {
     sheetMode = next;
     if (sheetMode !== "mobile") {
@@ -3274,6 +3278,13 @@ function fitViewForOverlays() {
  * 它会让人以为少挂了一个方法。要数就数 `Object.keys(window.CircleDocMap).length`。
  */
 window.CircleDocMap = {
+  refreshViewport: () => {
+    resizeStage();
+    if (state.jsapi.phase === "live" && state.jsapi.map) {
+      if (typeof state.jsapi.map.checkResize === "function") state.jsapi.map.checkResize();
+    }
+    renderAll(true);
+  },
   adoptIsochrone,
   setOverlays,
   getCenter: () => (state.center || DEFAULT_CENTER).slice(),

@@ -88,7 +88,7 @@ python -m venv .venv
 | 页面 | 路径 | 说明 |
 | --- | --- | --- |
 | 首页 | `/` | 服务探测结果 + 当前数据模式 + 降级横幅 |
-| 等时圈地图与体检报告 | `/isochrone.html` | 主演示页（地图 + 参数 + 报告面板） |
+| 生活圈体检工作台 | `/isochrone.html#setup` | 独立导航：新建体检、地图、报告、设施明细、盲区、运行详情与设置（[页面划分](docs/FRONTEND_PAGES.md)） |
 | 接口文档 | `/api/docs` | Swagger UI |
 | OpenAPI | `/api/openapi.json` | — |
 
