@@ -719,6 +719,10 @@ async def _probe_client(
         timeout=httpx.Timeout(timeout_s, connect=timeout_s),
         limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
         follow_redirects=False,
+        # 与 `infra/baidu_client.py` 的共享出口同一口径：`trust_env=False`。
+        # 这条链路的探测**带着 AK 在查询串里**，且 mock 演练依赖注入的 transport——
+        # 宿主系统代理会给它挂一个真实 transport 把注入的那份遮蔽掉（同文件注释）。
+        trust_env=False,
     )
     fake = FakeClock()
     client = BaiduClient(

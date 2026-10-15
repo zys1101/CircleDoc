@@ -10,9 +10,11 @@ AK 统计 QPS 与在途并发，它不认我们进程里有几个 client。修�
 ② 注入 `transport` / `http_client` / 假时钟 / 假 `base_url` 的客户端仍走**私有**出口——
    测试隔离与 `/api/health` 探测不能被牵连（假时钟进真实桶会把补令牌算术打乱）；
 ③ 熔断是**账号级**的：一个客户端攒够连败，另一个客户端的请求就该被拦；
-④ 跨三个客户端并发 12 个请求，在途峰值 ≤ `BAIDU_MAX_CONCURRENCY`（**这一条在修之前必红**）。
+④ 跨三个客户端并发 12 个请求，在途峰值 ≤ `BAIDU_MAX_CONCURRENCY`（**这一条在修之前必红**）；
+⑤ 出口的连接池不吃宿主机代理——否则 ①-④ 依赖的假传输层会被环境里的系统代理静默遮蔽
+   （2026-10-15 实测：带系统代理的机器上这些「零出网」用例真的打到了百度）。
 
-全程假传输层，一次真实出网都没有（条款 3.2.3(ii)）。
+全程假传输层，一次真实出网都没有（条款 3.2.3(ii)）——这句话现在由 ⑤ 守着，不再只是承诺。
 """
 
 from __future__ import annotations
@@ -195,3 +197,27 @@ def test_in_flight_peak_is_capped_across_clients(shared_egress: Egress) -> None:
     assert all(getattr(result, "ok", False) for result in results)
     assert spy.peak >= 2, "这轮没有真正并发起来，断言是空的"
     assert spy.peak <= MAX_CONCURRENCY, f"在途峰值 {spy.peak} 突破了账号级上限"
+
+
+def test_egress_does_not_take_the_host_proxy(shared_egress: Egress) -> None:
+    """⑤：出口的连接池**不许**听宿主机环境（`trust_env=False`）。
+
+    2026-10-15 实测：httpx 的 `trust_env` 默认 True，除了环境变量还会读 Windows 注册表里的
+    系统代理（`urllib.getproxies()` 实测回 `127.0.0.1:7897`），并给 `http://` / `https://`
+    各挂一个真实 transport 进 `AsyncClient._mounts`。而 `_transport_for_url()` **先查
+    `_mounts` 才回落到 `_transport`**，于是：
+
+      * 上面 ④ 那条「手改 `_transport`」的注入被整个架空——12 个请求真的发去了
+        `api.map.baidu.com`，回包里是百度的 `status=200（APP 不存在）`，
+        这条文件开头「一次真实出网都没有」的承诺在带系统代理的机器上是假的；
+      * AK 走查询串（`?ak=…`），经宿主任意第三方代理转发就是把密钥交给那个代理看。
+
+    🔴 断言写成「mounts 必须为空」而不是「trust_env 必须为 False」的另一半理由：
+    前者是这件事**唯一可观测的后果**——真出网不会在日志里留痕，只会让假传输层安静地
+    数到 0。只断言配置项的话，将来有人加一句 `mounts=` 也照样漏。
+    """
+    assert shared_egress.http.trust_env is False, "连接池开始读环境代理了"
+    assert not dict(shared_egress.http._mounts), (
+        "宿主代理给连接池挂了真实 transport，它会优先于注入的假传输层："
+        "自测会真打到 api.map.baidu.com，AK 也会经第三方代理外泄"
+    )

@@ -458,6 +458,17 @@ def _build_egress(
                 max_keepalive_connections=max(1, cfg.baidu_max_concurrency),
             ),
             follow_redirects=False,
+            # 🔴 刻意忽略宿主环境的代理（2026-10-15 实测踩中，条款 3.2.3(ii) 与 FR-410 都依赖它）。
+            # `trust_env` 是 httpx 的默认 True，它会从环境变量**和 Windows 注册表的系统代理**
+            # （`urllib.getproxies()`）给 `http://` / `https://` 各挂一个真实 transport 到
+            # `AsyncClient._mounts`。后果有两条，都不是能靠日志看出来的：
+            #   ① 挂载点优先于 `transport=` ——`_transport_for_url()` 先查 `_mounts`，于是注入的
+            #      `MockTransport` / 假传输层被整个**静默遮蔽**，标榜「一次真实出网都没有」的
+            #      自测会真打到 `api.map.baidu.com`（本机系统代理是 127.0.0.1:7897 时实测复现）。
+            #   ② AK 走的是**查询串**（`?ak=…`），经宿主任意第三方代理转发等于把密钥交给
+            #      那个代理看，这与「服务端 AK 不下发浏览器」是同一件事的另一半。
+            # 要经代理请显式传 `http_client=`（私有出口那条路），不靠环境猜。
+            trust_env=False,
         ),
         rate_limiter=rate_limiter or RateLimitRegistry(cfg, clock=clock, sleep=sleep),
         breakers=breakers or BreakerRegistry(cfg, clock=clock, now=wall_clock),
