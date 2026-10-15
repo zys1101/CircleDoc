@@ -8,10 +8,10 @@
 | 技术栈 | Python 3.11 + FastAPI 后端 · 零构建链原生 HTML/CSS/JS 前端 · SQLite 运行时缓存 · Docker 一键部署 |
 | 地图依赖 | 百度地图开放平台 Web 服务 API + JSAPI 4.0（浏览器端，按需动态注入、可降级） |
 | 事实依据 | 配额、接口路径、参数名、状态码、条款判定**一律以 [`docs/BAIDU_API_NOTES.md`](docs/BAIDU_API_NOTES.md) 为唯一出处**（2026-10-04 逐接口核验官方文档所得）；架构与需求见 [`PRD.md`](PRD.md) |
-| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（513 例单测 + 对比实验 + 诚实登记的未验证项） |
+| 测试与实验 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（521 例单测 + 对比实验 + 诚实登记的未验证项） |
 | 部署细节 | [`tools/README-deploy.md`](tools/README-deploy.md)（Dockerfile / compose / run 脚本的设计取舍） |
 | 开源协议 | [Apache License 2.0](LICENSE) |
-| 最后更新 | 2026-10-11 |
+| 最后更新 | 2026-10-15 |
 
 > **本文的写法约定**：凡是**代码里量过、跑过**的数字直接写出来并给出复现命令；凡是**依赖真实网络**才能得到的结论，一律写成「**未验证**」并说明原因，不含糊带过。
 >
@@ -118,7 +118,7 @@ python -m venv .venv
 ### 2.4 本地校验（零 AK、零出网）
 
 ```bash
-pytest -q                                              # 513 例（实测，零配置 / 零 AK / 零出网）
+pytest -q                                              # 521 例（实测，零配置 / 零 AK / 零出网）
 python -c "from services.poi_categories import assert_wordlist; assert_wordlist()"
 python tools/gen_samples.py --check                     # 合成样例基线校验
 ruff check . && black --check .                         # 零告警
@@ -131,7 +131,7 @@ node tools/map_layers_smoke.mjs _map_input.json         # 地图两个叠加图�
 > 另外 Windows 上请用 `./.venv/Scripts/python.exe -m pytest`：直接敲 `pytest` 会落到没装 `fastapi` 的解释器上，
 > 整个文件在**收集阶段**就报错、一个用例都不跑。
 
-🔴 **但「513 例全绿」不代表基线可复现**（2026-10-11 实测，登记为未修）：在跑过 live、
+🔴 **但「521 例全绿」不代表基线可复现**（该缺陷 2026-10-11 实测登记，到 521 例这一轮仍未修）：在跑过 live、
 `data/cache.db` 里留着真实 POI 的开发机上，`pytest tests/test_samples_baseline.py` **单独跑必红**
 （`assert 67.8 == 98.24`，就是上面第 3 步那对污染数字），全量跑却是绿的——因为排在它前面的文件
 替换了进程级缓存单例。三条对照命令与机理写在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.20 末。
@@ -584,7 +584,7 @@ PRD §10-6：**演示现场的网络状况无法提前得知**，因此必须准
 
 > ⚠️ **口径纪律**：断网时**地图不可用是官方架构决定的既成事实**（JSAPI 运行时与地图瓦片均由百度服务器动态下发，无法 vendored），不是工程缺陷。因此本项目**不承诺「断网也能演示地图」**——正确表述是「**断网演示 = 完整报告 + 图表 + 合成示意图**；地图演示需现场可访问 `api.map.baidu.com`」。
 >
-> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（513 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
+> ⚠️ **两条预案都已实跑留证**。不允许只准备 A——那是把交付押在一个自己不掌握的条件上。**预案 B** 的证据是 §2.4 的零配置门禁（521 例 + 两套冒烟自测）；**预案 A** 已于 **2026-10-10** 用真实 AK 实跑，记录在 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.3（它同时照出 §2.6 ~ §2.9 四个只在 live 下暴露的缺陷）。
 
 ---
 
@@ -695,7 +695,7 @@ python tools/gen_samples.py             # 重算 data/samples/*.json 基线（mo
 python tools/gen_samples.py --check     # 零出网校验清单与基线一致
 ```
 
-### 10.2 Docker：镜像已由 CI 真实构建并跑绿，compose 与 bind mount 仍未验
+### 10.2 Docker：镜像已由 CI 真实构建并跑绿；compose 已入闸，实跑证据待回填
 
 开发机**没有 Docker**，但 2026-10-07 首次推送时，GitHub Actions 的 `build` job
 **真的执行了 `docker build`** 并且跑绿了。容器内实测确认了三件事：
@@ -707,12 +707,24 @@ python tools/gen_samples.py --check     # 零出网校验清单与基线一致
 > （YAML 解析、`bash -n`、`[ScriptBlock]::Create` 解析、指令与上下文路径核对、
 > `.dockerignore` 规则推演）。CI 那次构建是本仓库镜像第一次真实构建。
 
-**仍然未验证的**（CI 用的是裸 `docker run`，**既没有 `-v` bind mount，也没有走 compose**）：
+**2026-10-15 起 CI 多了第 4 个 job（`compose`），FR-408 那句「一条 `docker compose up`」第一次进入自动闸门。**
+它跑的是 `docker compose config --quiet` → `up -d --build` → **等 `docker inspect` 的健康状态真的转成
+`healthy`**（不是等 curl 通——`HEALTHCHECK` 带 `--start-period=25s`，只等 HTTP 会稳定假失败）→
+**从容器内（`USER 1000:1000`）往 `/app/data` 写一个文件、在宿主项目目录里读回来**（bind mount 方向 +
+Linux 宿主的 UID 写权限，这正是 `docker run` 那条冒烟覆盖不到的两件事）→ `POST /api/analysis` 断言
+`usage.http_requests == 0`（compose 透传的那套出网预算没有把离线路径变成出网路径）→
+`docker compose logs --no-log-prefix` 逐行 `json.loads`（`LOG_JSON=true` 在容器里确实是单行 JSON）。
+本地能做的只有 YAML 解析与 step 清单核对；**这个 job 自己是否跑绿，要看本轮 push 之后的 Actions 记录**，
+跑绿前本节标题后半句就是它的状态。
 
-- **`docker compose up` 能否起**——评审机的 Compose 版本与本文件用到的语法子集是否匹配，从未实机验证
-- **Linux 宿主上非 root（数字 UID 1000）对 bind mount `./data` 的写权限**——宿主用户不是 1000 时
-  SQLite 会报 `attempt to write a readonly database`，需 `sudo chown -R 1000:1000 data`。
-  ⚠️ 这一条**在开发机上复现不出来**：Docker Desktop（Windows / macOS）会自动处理 UID 映射
+**仍然未验证的**：
+
+- **评审机自己的 Compose 版本**——CI 跑绿只证明 GitHub runner 上那一个版本能起；本文件用到的语法子集
+  （`${VAR:-默认}` 插值、`env_file` 与 `environment` 叠加、`logging.options`）刻意选了 v1/v2 都成立的写法，
+  但「哪 one 版本在什么地方会硬失败」仍是推演。**尤其回避了 `env_file: [{path, required: false}]`**，
+  那要 Compose ≥ v2.24，旧版本遇到它是硬失败而不是忽略
+- **宿主用户不是 1000 时**的 bind mount 写权限（CI 的 runner 用户恰好是 uid 1000，所以它测的是「1000 能写」，
+  **测不出「非 1000 写不了」**）——真要遇到就是 `sudo chown -R 1000:1000 data`，Docker Desktop（Win/mac）自动处理
 - 容器内时区：`QUOTA_BREAKER_TZ_OFFSET_HOURS=8` 用固定偏移而非 `tzdata`，因此 slim 镜像缺时区库
   不影响「次日零时」判定——这一点仍是**推理**，没有实机验证
 
@@ -800,7 +812,7 @@ FR-108 联想、FR-413 页脚、FR-305 PNG）都在往同一批文件里加代�
 文档链接，不在其列——页脚那两条官方隐私政策与服务条款链接就属于这一类。口径细化过程见
 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §2.17）。
 
-> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，三个页面（`index.html` / `isochrone.html` / 报告面板）合计 8 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（**62 例**，2026-10-11 由 `--collect-only` 实测），它把 `web/report.js`（**27 个**）与 `web/isochrone.js`（62 个）里全部 `getElementById("…")` 的 id 抠出来逐个断言页面里存在（`isochrone.html` 去重后 **97 个**），并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
+> 该偏离同时也意味着：**PRD §5 的「Vue global build」这一项在本项目中并未采用**——前端是原生 HTML/CSS/JS，两个页面（`index.html` / `isochrone.html`，后者内含地图工作台 / 体检报告两个视图与三块面板）合计 10 个文件。这也让风险 R11（Vue 无构建模式下模板写在 JS 字符串里、没有编译器兜底）**自然消失**；替代保障是 `tests/test_web_smoke.py`（**69 例**，2026-10-15 由 `--collect-only` 实测），它把四个脚本里全部 `getElementById("…")` 的 id 抠出来**按脚本与它所在那一页成对**断言存在——`report.js`（**27 个**）、`isochrone.js`（**62 个**）、`shell.js`（**2 个**：`#workbench` / `#report`，这两个名字被改了整个「分页」会变成「全隐藏」）、`app.js`（**13 个**，首页把 id 收在一个 `ELEMENTS` 字面量里，少一个就是 `ELEMENTS.banner.hidden` 直接抛错、整页停在「读取中…」），页面侧 `isochrone.html` 去重后 **98 个**、`index.html` **15 个**；并按后端 `services/poi_categories.py` 的词表逐键、逐序、逐文案对账七个类别勾选框——抓的是「改了 HTML 忘了改 JS」这类**控制台一条错误都不会有**的静默失败。
 
 ### 10.5 🔴 前 K 实测用了分层选择，而非 §4.3 字面的全局最近 K
 
