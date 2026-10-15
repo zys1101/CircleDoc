@@ -3,19 +3,22 @@
 R11 的原话是「Vue 无构建模式下模板写在 JS 字符串里，写错了没有编译器与类型检查兜底 →
 CI 增一条无头冒烟（请求首页并断言关键 DOM 节点存在）」。本项目最后没上 Vue
 （图表也改成手绘 SVG，见 `web/report.js` 的说明），但**风险完全相同且更直接**：
-`isochrone.js` 与 `report.js` 各自用 `getElementById` 取一批节点，任何一个 id 在 HTML 里
-写错或改名，面板就会静默半死 —— 没有异常、没有报错，只是某一块永远空白。
+`isochrone.js`、`report.js`、`shell.js` 与首页的 `app.js` 各自用 `getElementById` 取一批节点，
+任何一个 id 在
+HTML 里写错或改名，面板就会静默半死 —— 没有异常、没有报错，只是某一块永远空白。
 
 所以本文件做四件事：
 
-1. **静态页可服务**：`/`、`/isochrone.html`、两个脚本、三个样式表全部 200。
+1. **静态页可服务**：`/`、`/isochrone.html`、四个脚本、四个样式表全部 200，
+   外加首页每条 `href` 都落到真实去路（路由命中或文件存在）。
 2. **零公网外链**（R12 / R13）：**资源标签**（`script` / `link` / `img` / `iframe` …）的
    `src` / `href` 里不许出现任何 `http://` / `https://` / `//cdn` 形态的地址。百度 JSAPI 是
    **运行时动态注入**的，不该出现在静态 HTML 里（那是 R13 要求的可降级形态）。
    页脚 `<a href="https://lbsyun…">` 是条款 7.3 要求的隐私政策链接，属导航而非加载，
    不在禁止之列——但白名单只认那两个官方 URL，且必须带 `rel="noopener noreferrer"`。
-3. 🔴 **DOM 契约对账**：把两个脚本里 `getElementById` 取到的 id 全部抠出来，
-   逐个断言在 `isochrone.html` 里存在。这条断言抓到的是「改了 HTML 忘了改 JS」
+3. 🔴 **DOM 契约对账**：把四个脚本里 `getElementById` 取到的 id 全部抠出来，
+   逐个断言在**它所在那一页**里存在（`app.js` 对 `index.html`，其余三个对 `isochrone.html`）。
+   这条断言抓到的是「改了 HTML 忘了改 JS」
    这类只能靠肉眼发现的错误。
 4. 🔴 **前端 ↔ 后端词表对账**（FR-104）：类别勾选框的 `data-cat` 取值与顺序、勾选框文案，
    以及标记「哪几类装着盲区主判定」的 `data-blind-cat`，全部与
@@ -44,7 +47,10 @@ WEB = ROOT_DIR / "web"
 ISOCHRONE_HTML = WEB / "isochrone.html"
 REPORT_JS = WEB / "report.js"
 ISOCHRONE_JS = WEB / "isochrone.js"
+SHELL_JS = WEB / "shell.js"
+APP_JS = WEB / "app.js"
 APP_CSS = WEB / "app.css"
+HOME_CSS = WEB / "home.css"
 ISOCHRONE_CSS = WEB / "isochrone.css"
 REPORT_CSS = WEB / "report.css"
 INDEX_HTML = WEB / "index.html"
@@ -141,9 +147,12 @@ def html_ids(path: Path) -> set[str]:
         "/isochrone.html",
         "/isochrone.js",
         "/report.js",
+        "/shell.js",
         "/app.css",
+        "/home.css",
         "/isochrone.css",
         "/report.css",
+        "/app.js",
     ],
 )
 def test_static_assets_are_served(client: TestClient, path: str) -> None:
@@ -156,6 +165,39 @@ def test_home_page_exposes_the_key_dom_nodes(client: TestClient) -> None:
     text = client.get("/").text
     for node_id in ("mode-badge", "banner", "services", "reprobe"):
         assert f'id="{node_id}"' in text, f"首页缺少 #{node_id}"
+
+
+def test_home_page_links_all_resolve(client: TestClient) -> None:
+    """首页每一条 `href` 都要落到真实去路：路由命中、或同目录静态文件存在。
+
+    入口卡那一轮把「接口文档 / 健康探测 / 缓存统计」从页脚灰字提成了四个大按钮，
+    提级之后指错的代价也跟着变大：以前点错一条灰字链接只是看不见，现在它是页面的主行动。
+    两类目标分开判：
+      * `/api/...` 交给路由表 —— 端点改名（比如 `/api/cache/stats` 挪走）本页看不出来，
+        但 `test_static_assets_are_served` 那套 200 断言管不到入口卡上的文案，这里补上；
+      * `./xxx.html` 交给磁盘 —— 静态挂载不会为拼错的文件名报错，只会 404。
+    ⚠️ 判存在**不发请求**：`client.get("/api/health")` 会真的向百度补一次探测（首页那个
+    `client` 用的是 `api.app:app`，吃的是真实 `.env` 与真实 AK）。所以取 `app.openapi()`
+    的 paths 并上顶层路由（`/api/docs` 这类 UI 路由不在 schema 里，但在 `app.routes` 上）。
+    白名单里的官方政策外链不在此列（条款 7.3 要的就是那两条，
+    它们的形态由 `test_no_external_asset_references` 管）。
+    """
+    text = strip_html_comments(INDEX_HTML.read_text(encoding="utf-8"))
+    refs = [ref for tag, ref, _ in tag_refs(text) if tag == "a"]
+    assert refs, "没从 index.html 里解析到任何 <a> href —— 正则或文件路径失效了"
+    routes = {getattr(route, "path", "") for route in client.app.routes}
+    routes |= set(client.app.openapi().get("paths", {}))
+    external = {ref for ref in refs if EXTERNAL.match(ref.strip())}
+    for ref in external:
+        assert ref in OFFICIAL_POLICY_URLS, f"首页外链未登记：{ref}"
+    for ref in [ref for ref in refs if ref not in external]:
+        clean = ref.split("#", 1)[0].split("?", 1)[0]
+        if not clean:
+            continue
+        if clean.startswith("/"):
+            assert clean in routes, f"首页链接 {ref} 不在路由表里"
+            continue
+        assert (WEB / clean).is_file(), f"首页链接 {ref} 指向不存在的文件"
 
 
 # --------------------------------------------------------------------------------------
@@ -194,22 +236,35 @@ def test_jsapi_is_not_hardcoded_in_static_html() -> None:
 # --------------------------------------------------------------------------------------
 # 3. DOM 契约对账（本文件的核心断言）
 # --------------------------------------------------------------------------------------
-@pytest.mark.parametrize("script", [REPORT_JS, ISOCHRONE_JS], ids=["report.js", "isochrone.js"])
-def test_every_get_element_by_id_exists_in_the_page(script: Path) -> None:
-    """两个脚本取的每个 id，`isochrone.html` 里都必须有。
+@pytest.mark.parametrize(
+    "script,page",
+    [
+        (REPORT_JS, ISOCHRONE_HTML),
+        (ISOCHRONE_JS, ISOCHRONE_HTML),
+        (SHELL_JS, ISOCHRONE_HTML),
+        (APP_JS, INDEX_HTML),
+    ],
+    ids=["report.js", "isochrone.js", "shell.js", "app.js"],
+)
+def test_every_get_element_by_id_exists_in_the_page(script: Path, page: Path) -> None:
+    """四个脚本取的每个 id，它所在那一页里都必须有。
 
     这条抓的是「改了 HTML 忘了改 JS」：漏一个 id，`el.x` 就是 null，
     面板某一块永远空白，而控制台**一条错误都不会有**（只在真正 appendChild 时才炸）。
 
-    ⚠️ 两个脚本都要覆盖：FR-104 落地时只给 `report.js` 对账，`isochrone.js` 那侧新加的
+    ⚠️ 四个脚本都要覆盖：FR-104 落地时只给 `report.js` 对账，`isochrone.js` 那侧新加的
     `#cat-all` / `#category-hint` 就落在哨兵外面 —— 少一个 id 的后果是「类别警示永远不出现」，
-    恰好是最难看出来的那种坏法。
+    恰好是最难看出来的那种坏法。`shell.js` 是视图切换那一轮加进来的，它取的
+    `#workbench` / `#report` 要是被改名，后果是整个「分页」变成「全隐藏」。
+    `app.js`（首页）是首页收拢那一轮补进来的：它把 13 个 id 收在一个 `ELEMENTS` 字面量里，
+    少一个就是 `ELEMENTS.banner.hidden` 直接抛错、整页停在「读取中…」。
+    脚本与页面**成对**参数化而不是共用 `ISOCHRONE_HTML`：首页的 id 在地图页一个都不存在。
     """
     wanted = sorted(set(GET_BY_ID.findall(script.read_text(encoding="utf-8"))))
     assert wanted, f"没从 {script.name} 里解析到任何 getElementById —— 正则或文件路径失效了"
-    available = html_ids(ISOCHRONE_HTML)
+    available = html_ids(page)
     missing = [node_id for node_id in wanted if node_id not in available]
-    assert missing == [], f"isochrone.html 缺少这些 id：{missing}"
+    assert missing == [], f"{page.name} 缺少这些 id：{missing}"
 
 
 def test_category_checkboxes_match_the_backend_wordlist() -> None:
@@ -394,10 +449,14 @@ def wcag_ratio(fg: str, bg: str) -> float:
 def test_footer_disclosure_passes_aa_contrast() -> None:
     """条款 7.3 要的是「**显著**披露」：页脚那段 13 px 正文得过 AA 的 4.5:1。
 
-    换掉 `--muted` 的理由是**余量**而不是不过线：#6b7280 在纯白卡片上 4.83，看着一直安全，
-    坐到页面底色 #f6f7f9 上就只剩 4.51（距门槛 0.01），而 FR-413 / 6.6 / 7.3 的文字
+    最初换掉 `--muted` 的理由是**余量**而不是不过线：#6b7280 在纯白卡片上 4.83，看着一直安全，
+    坐到旧的页面底色 #f6f7f9 上就只剩 4.51（距门槛 0.01），而 FR-413 / 6.6 / 7.3 的文字
     恰好只有页脚这一个落点。#4b5563 在同一位置是 7.05。
-    🔴 反过来说这条断言**拦不住旧配色**（4.51 刚好过线），它拦的是以后有人把页脚换成更浅的灰。
+    2026-10-14 换 Fluent 色板后这一组数字全变了：`--muted` 成了 #605e5c、底色 #faf9f8，
+    量得 6.14 —— 已经过线，但页脚继续用 #4b5563（同一处 7.19），理由从「卡线」换成「显著」：
+    条款要的文字不该和 `.hint` 同权重。
+    🔴 这条断言比对的是**现取的十六进制**，所以换色不会让它假绿也不会让它假红；
+    它拦的是以后有人把页脚换成更浅的灰。
     """
     css = APP_CSS.read_text(encoding="utf-8")
     bg = re.search(r"--bg:\s*(#[0-9a-fA-F]{6})", css)
@@ -405,6 +464,55 @@ def test_footer_disclosure_passes_aa_contrast() -> None:
     assert bg and fg, "页脚配色不再是可解析的十六进制，这条断言失去比对对象"
     ratio = wcag_ratio(fg[1], bg[1])
     assert ratio >= 4.5, f"页脚 {fg[1]} 对 {bg[1]} 只有 {ratio:.2f}:1，13 px 不过 AA"
+
+
+def test_dark_head_band_keeps_every_foreground_legible() -> None:
+    """页头是**深色实底带**，那么带里每一层前景都必须按深色底重算，而不是沿用浅底那一套。
+
+    2026-10-14 换 Fluent 色板时一次踩中两条，都是静默的：
+      · 本仓库**没有**全局 `a { color }`，页头从白底改成深色底之后，`.sub` 里的「← 返回首页」
+        继续吃 UA 默认的链接蓝（访问过还变紫），实测贴在 `#16202c` 上约 3:1 ——
+        页面唯一的返回入口差点看不见；
+      · 反过来给裸 `.sub` 写上深色带的亮色，就会顺着复用的类名流进报告明细表的
+        `#poi-table td.sub`，12 px 的次级文字掉到 1.5:1（浏览器里逐个元素算对比度扫出来的）。
+    所以这里钉四件事：① 带底确实是深色（对纯白 ≥ 7:1，浅底就不配叫这条带子）；
+    ② 带上的两层前景（标题白、标语灰）各自过 AA；③ 页头里的链接自带前景色，不留给 UA；
+    ④ 深色带那组 token 不许出现在裸 `.sub` 上。断言全部从 CSS 现取现算，换根棒就重算。
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+    tokens = {
+        name: re.search(rf"--head-{name}:\s*(#[0-9a-fA-F]{{6}})", css)
+        for name in ("bg", "fg", "muted")
+    }
+    missing = [name for name, hit in tokens.items() if not hit]
+    assert not missing, f"页头深色带的 token 不见了或不再是可解析的十六进制：{missing}"
+    band = tokens["bg"][1]
+    assert wcag_ratio("#ffffff", band) >= 7, f"页头底 {band} 对纯白不足 7:1，这一带已经不是深色了"
+
+    head = re.search(r"\.page-head\s*\{([^}]*)\}", css)
+    assert head and "background: var(--head-bg)" in head[1], ".page-head 不再用 --head-bg 做底"
+    # `.mode` / `.engine` 是带内的亮底 chip：颜色只能由它们自己或 body 给。
+    assert "color:" not in head[1], ".page-head 上写了 color，带里的亮底 chip 会变成白字压白底"
+
+    for name in ("fg", "muted"):
+        ink = tokens[name][1]
+        ratio = wcag_ratio(ink, band)
+        assert ratio >= 4.5, f"页头 {name} {ink} 对带底 {band} 只有 {ratio:.2f}:1，不过 AA"
+
+    rules = css_rules(APP_CSS)
+    sub_link = rules.get(".page-head .sub a")
+    assert sub_link, ".page-head .sub a 没有自带前景色，UA 的链接蓝会贴在深色带上看不见"
+    assert "var(--head-fg)" in sub_link, ".sub a 的颜色不再跟着深色带那一组 token 走"
+
+    # 🔴 深色带那一组亮色**只许**待在 `.page-head` 里：`.sub` 这个类名是复用的 ——
+    #   报告明细表里有 `#poi-table td.sub`（次级单元格），漏成裸选择器就是把白天的白字
+    #   送进白底的表格，实测 12 px 掉到 1.5:1。`css_rules` 的键是整条选择器，
+    #   等值查正好分得清「裸 `.sub`」与「`.page-head .sub`」。
+    for selector in (".sub", ".sub a"):
+        body = rules.get(selector, "")
+        assert (
+            "--head-" not in body
+        ), f"裸 {selector} 用上了深色带的 token，报告明细表的 td.sub 会跟着变亮到看不见"
 
 
 # --------------------------------------------------------------------------------------
@@ -671,6 +779,18 @@ def test_mobile_hit_areas_are_44px() -> None:
     band = re.search(r"@media \(max-width: 480px\) \{(?P<body>.*?)\n\}", css, re.DOTALL)
     assert band and ".page-map button" in band["body"], "≤480 的按钮 44 px 兜底被删了"
     assert "min-height: 44px" in band["body"]
+
+    # 共用层与首页层各有一条 44 px 兜底，都不在 `sheet_rule` 的射程里（那套只认
+    # `.page-map[data-sheet-mode="mobile"]` 前缀），删掉一样是静默不达标。
+    app = strip_css_comments(APP_CSS.read_text(encoding="utf-8"))
+    shared = re.search(r"@media \(max-width: 768px\) \{(?P<body>.*?)\n\}", app, re.DOTALL)
+    assert shared, "app.css 的移动端热区块整块不见了"
+    for selector in ("button", ".tab", ".page-foot a"):
+        assert selector in shared["body"], f"app.css 移动端缺少 {selector} 的 44 px 兜底"
+    assert "min-height: var(--tap)" in shared["body"]
+    home = strip_css_comments(HOME_CSS.read_text(encoding="utf-8"))
+    entries = re.search(r"@media \(max-width: 768px\) \{(?P<body>.*?)\n\}", home, re.DOTALL)
+    assert entries and ".entry-card" in entries["body"], "首页入口卡（`<a>`）的移动端热区兜底被删了"
 
 
 def test_mobile_head_yields_the_first_screen_to_the_map() -> None:

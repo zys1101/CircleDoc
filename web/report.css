@@ -22,6 +22,87 @@
   margin: 0;
 }
 
+/* 报告页的分节页签**贴在顶上**：面板现在自己滚（外壳在 `isochrone.css` 里把它定高），
+   六选一的那排按钮跟着滚走就等于「翻不动了」。数据源徽标不跟着贴：
+   它是一次性的结论上下文（今天同样在长页最上面，滚过就看不见），
+   而页签是每次都要用的控件，两者抢同一条 `top: 0` 还得算头部高度。 */
+#report-body > .tabstrip {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -14px 12px;
+  padding: 4px 14px;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  background: var(--card);
+  box-shadow: 0 1px 0 var(--line);
+}
+
+/* 分节标题：现在是「一页一节」，标题就是这一页的名字，给一条上分隔线而不是继续堆 margin。 */
+#report .chunk > h3:first-child {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+#report .chunk h3 {
+  margin: 16px 0 8px;
+  font-size: 14px;
+  letter-spacing: 0.2px;
+}
+
+/* 空态是一块可读的占位卡，不是一句飘在角落的灰字：现场停在「还没跑体检」时，
+   用户要能看出这块区域就是报告，而不是「报告没做」。 */
+#report-empty {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px dashed var(--line-strong, #c6cfdd);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* 导出条：**不**做成 sticky。试过贴在报告页底部，实测结果是把下面的表格行拦腰遮住
+   （449 px 高的滚动区里那条贴底占 ~150 px，等于永久遮住三分之一的内容），
+   而导出是低频动作，滚到当前分节末尾就能拿到。分隔线与底色保留，让它仍然像一条动作区。 */
+.report-actions {
+  margin: 16px -14px -14px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.report-actions h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.2px;
+}
+
+.report-actions .actions {
+  margin: 0;
+}
+
+.report-actions .hint {
+  margin: 8px 0 0;
+}
+
+/* 报告页现在横跨整幅视口（1400 px），评分卡与结论摘要如果继续吃满，
+   右边就是一大片空白、正文一行拉到 130 字。给文字类内容一个可读宽度；
+   设施明细表**不**限宽（缺陷 #15 那一条要的就是整幅宽度）。 */
+#report .score-card,
+#report #summary-list,
+#report .blind-list {
+  max-width: 860px;
+}
+
+#report .poi-toolbar label > span {
+  white-space: nowrap;
+}
+
 /* FR-306 数据来源徽标：live / cache / sample 三态必须一眼可分。 */
 .source-badge {
   display: inline-block;
@@ -289,9 +370,13 @@
   font-size: 13px;
 }
 
+/* 次级单元格：以前靠 `opacity: .7` 做层次，实测折出来只有 2.8:1（12 px 正文，AA 要 4.5），
+   而 app.css 的 `.sub` 换成深色带专用亮色之后更是掉到 1.5:1 —— 等于这列不显示。
+   改成直接给次级色：`--muted` 对白底 6.46:1，和评分卡那条是同一个口径
+   （「层次只留字重与字号，不用透明度」），顺带不再依赖 `.sub` 的继承。 */
 #poi-table td.sub {
   font-size: 12px;
-  opacity: 0.7;
+  color: var(--muted);
 }
 
 /* FR-213：可排序表头。箭头 + 下划线 + aria-sort 三重提示 —— 不只靠颜色。 */
@@ -327,12 +412,16 @@
   outline-offset: 1px;
 }
 
+/* 「圈外」行与「未实测」值以前用 `opacity: .6` 做弱化：15 px 的正文折出来只有 2.37:1，
+   换 Fluent 色板后是 4.37:1，仍然差一点点就过 AA。这两处改成直接给次级色
+   （`--muted` 对白底 6.46:1），弱化靠颜色与斜体，不靠把透明度压到线下 ——
+   与评分卡那条「层次只留字重与字号」是同一个口径。 */
 #poi-table tr.outside td {
-  opacity: 0.6;
+  color: var(--muted);
 }
 
 #poi-table td.muted {
-  opacity: 0.6;
+  color: var(--muted);
   font-style: italic;
 }
 

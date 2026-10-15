@@ -1,22 +1,84 @@
-/* CircleDoc 首页样式：只做「零配置时一眼看清现在是什么模式」这一件事。
-   🔴 不引外部字体、不引任何 CDN（PRD R12）；字体一律走系统栈，M4 的图表样式另起文件。 */
+/* CircleDoc 共享样式层：token + 基础版式 + 控件（按钮 / 输入 / 页签 / 卡片）。
+   🔴 不引外部字体、不引任何 CDN（PRD R12）；字体一律走系统栈。
+   ⚠️ 本文件是首页与地图页**共用**的那一层，所以这里只放「两页都要」的东西：
+      首页专属版式在 home.css，地图页专属版式在 isochrone.css，报告面板在 report.css。
+      改这层的任何一个 token 都会同时改两页的观感 —— 这是刻意的单一真相源。
+      ⚠️ 下面那条移动端 44 px 兜底只写了 `button, .tab`：非按钮的可点元素（比如首页的
+      入口卡是 `<a>`）要在**自己那一层**补热区，别指望这层兜住它。
+   配色是 Fluent / Windows 11 浅色主题那一组（强调蓝 + 中性灰阶 + 页头深色带）。
+   会同时改两页的不只是颜色：`--head-*` 还被 isochrone.css 拿去定义图区镜框，
+   所以「换一根深色棒」= 页头与图框一起换，这是要的效果，不是副作用。 */
 
 :root {
-  --bg: #f6f7f9;
-  --fg: #1f2430;
-  --muted: #6b7280;
-  --line: #e3e6ec;
+  /* --- 原始色板（primitive）：只在这里出现十六进制，上层用语义 token。 ----------
+     Fluent / Windows 11 浅色主题那一组：`#faf9f8` 画布、`#201f1e` 正文、`#e1dfdd` 分隔线、
+     `#605e5c` 可访问描边（WinUI 的 NeutralStrokeAccessible），强调色取系统蓝。
+     ⚠️ 这里必须是本文件第一处 `--bg` 赋值：`test_footer_disclosure_passes_aa_contrast`
+     按正则现取色值再算对比度，换了底色就得同时复核下面 `.page-foot` 那一条。 */
+  --bg: #faf9f8;
+  --fg: #201f1e;
+  --muted: #605e5c;
+  --line: #e1dfdd;
+  --line-strong: #605e5c;
   --card: #ffffff;
-  --ok: #1c7d55;
-  --warn: #a9640a;
-  --warn-bg: #fff7e6;
-  --warn-line: #f0d9a8;
-  --ok-bg: #eaf6f0;
-  --ok-line: #cfe6da;
+  --ink-strong: #1b1a19;
+
+  /* 🔴 强调蓝刻意用**深一档**的 `#005fb8`（WinUI 浅色主题 AccentButtonBackground 就是它），
+     不是最亮那档 `#0078d4`：纯白压在 `#0078d4` 上只有 **4.53:1**，正好卡在 AA 的 4.5 线上；
+     `#005fb8` 同一处是 **6.31:1**。按钮标签与 `--accent-ink` 正文是 13.5 px，
+     不该把达标与否交给一个 0.03 的余量 —— 和本文件页脚那条是同一个口径。
+     `--accent-hover` 反而是更亮的 `#106ebe`：这是 Win11 强调按钮的悬停方向（变亮不是变深）。 */
+  --accent: #005fb8;
+  --accent-hover: #106ebe;
+  --accent-soft: #eff6fc;
+  --accent-ink: #ffffff;
+
+  /* 页头深色带。这三个值与地图页那块图区镜框是同一组（isochrone.css 的 `--map-deep*`
+     现在反向引用这里），所以页头与深色图框读起来是「同一块金属」，
+     而不是两种略微不同的黑 —— 两页各留一份就会漂。 */
+  --head-bg: #16202c;
+  --head-bg-2: #0e1620;
+  --head-line: #2a3a4e;
+  --head-fg: #ffffff;
+  --head-muted: #b8c4d2;
+
+  --ok: #0f7b0f;
+  --ok-bg: #dff6dd;
+  --ok-line: #c3e6c5;
+  --warn: #9d5b00;
+  --warn-bg: #fff4ce;
+  --warn-line: #f5e2ab;
+
+  /* --- 语义层：控件尺寸 / 圆角 / 阴影 / 焦点环。 --------------------------------
+     圆角收到 Fluent 那一档（控件 6 px、卡片 8 px），阴影几乎压平：
+     「工具感」靠描边与色块的对比给，不靠投影把卡片浮起来。 */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-pill: 999px;
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --sh-2: 0 2px 6px rgba(0, 0, 0, 0.1);
+  --sh-pop: 0 8px 20px rgba(0, 0, 0, 0.18);
+  --focus: #0078d4;
+  --ring: 0 0 0 3px rgba(0, 120, 212, 0.32);
+  --tap: 44px; /* PRD §6.3 的最小触摸热区，移动端各处引用 */
+
+  color-scheme: light;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* 🔴 `[hidden]` 必须赢过作者规则里的 `display`。UA 样式表那条 `[hidden] { display: none }`
+   权重低于任何一条作者规则，本仓库有两处正好踩在缝上：`.profile-badge { display: inline-block }`
+   （report.css 里为它单独补了一条 `[hidden]`，因为那条徽标确实要能关掉）与
+   `.suggest-list { display: block }`（那个靠 `data-state="none"` 关，不用 hidden）。
+   `shell.js` 用 `hidden` 属性切面板内部的分节（`.group` / `.chunk`），一旦哪个分节将来
+   被套上带 `display` 的规则，就会变成「关不掉的区块」——而且没有任何报错。
+   这一条是把那类事故一次性堵住；代价是 `input[type="hidden"]` 也被命中，那正是它本来的显示值。 */
+[hidden] {
+  display: none !important;
 }
 
 body {
@@ -24,33 +86,95 @@ body {
   background: var(--bg);
   color: var(--fg);
   font: 15px/1.6 "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
 }
 
+/* ---------------------------------------------------------------------------------------------
+   页头：品牌 + 状态徽标压成一行，整条是**深色实底带**。
+   旧版是三行（标题 / 标语 / 两个徽标各占一行），在 900 px 高的笔记本上光页头就吃掉 ~200 px，
+   等于把地图往下推一屏。`.sub` 的结构不能动：FR-106 的移动端压缩规则靠 `.sub span`
+   只藏标语、留「← 返回首页」，`test_mobile_head_yields_the_first_screen_to_the_map` 钉的就是这个。
+   ⚠️ 深色带改变了这一层的前景归属：`h1` 与 `.sub` 必须自带亮色，而 `.mode` / `.engine`
+   是带内自己的**亮底 chip**，所以它们**不许**从 `.page-head` 继承颜色（下面刻意不给
+   `.page-head` 写 `color`）—— 一旦写了，chip 里就是白字压白底，且没有任何报错。
+   --------------------------------------------------------------------------------------------- */
 .page-head {
-  padding: 28px 20px 20px;
-  background: var(--card);
-  border-bottom: 1px solid var(--line);
+  padding: 14px 20px;
+  background: var(--head-bg);
+  border-bottom: 1px solid var(--head-line);
+}
+
+.head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .page-head h1 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   margin: 0;
-  font-size: 22px;
+  color: var(--head-fg);
+  font-size: 19px;
+  font-weight: 650;
   letter-spacing: 0.2px;
 }
 
-.sub {
-  margin: 4px 0 14px;
-  color: var(--muted);
+/* FR 编号是验收对齐用的，不该和标题抢注意力，但也不能不显示。
+   深色带上改成「同色系描边 + 半透明底」，它属于标题而不是状态 chip。
+   `#b8c4d2` 对 `#16202c` 实测 9.29:1，11 px 小字也过 AAA。 */
+.head-fr {
+  padding: 2px 8px;
+  border: 1px solid var(--head-line);
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--head-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+/* 🔴 必须带 `.page-head` 前缀：`.sub` 这个类名在两处复用 —— 页头的标语段，和报告明细表里
+   的次级单元格 `#poi-table td.sub`（report.css）。不带前缀的话，深色带那一组亮色会顺着
+   `.sub` 流进白底的表格里，实测把 12 px 的次要文字压到 1.5:1（等于看不见）。
+   `sheet_rule(".sub")` 只认 isochrone.css 里那条移动端规则，改这里的前缀不影响它。 */
+.page-head .sub {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 2px 0 0;
+  color: var(--head-muted);
   font-size: 13px;
 }
 
+/* 同上：`.back`（返回首页）必须自带前景色。本仓库**没有**全局 `a { color }`，
+   页头从白底改成深色带之后，这条链接继续吃 UA 默认的链接蓝（访问过还变紫），
+   贴在 #16202c 上约 3:1 —— 页面唯一的返回入口差点静默消失。
+   比标语更亮一档是刻意的：它是导航，不该和重复信息同权重。下划线保留（UA 默认）。 */
+.page-head .sub a {
+  color: var(--head-fg);
+}
+
+.head-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 状态徽标是带内的**亮底 chip**（`.engine` 在 isochrone.css 里同一口径）：
+   前景继续走 `--fg`，所以这里不许出现 `color: var(--head-*)`。 */
 .mode {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--bg);
   font-size: 13px;
 }
@@ -60,34 +184,310 @@ body {
   height: 9px;
   border-radius: 50%;
   background: var(--muted);
+  box-shadow: 0 0 0 3px rgba(96, 94, 92, 0.18);
 }
 
 .mode[data-mode="live"] .dot {
   background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(15, 123, 15, 0.18);
 }
 
 .mode[data-mode="cache"] .dot,
 .mode[data-mode="mock"] .dot {
   background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(157, 91, 0, 0.18);
 }
 
+/* ---------------------------------------------------------------------------------------------
+   顶层视图切换条 + 通用页签条。
+   `.viewbar` 在移动端整条收起（isochrone.css 里那条 `.page-map[data-sheet-mode="mobile"] .viewbar`），
+   把手条接管导航；`.tabstrip` 本身在移动端继续可用，因为它活在面板内部。
+   --------------------------------------------------------------------------------------------- */
+.viewbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  box-shadow: var(--sh-1);
+}
+
+.viewbar-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.tab:hover {
+  background: rgba(0, 95, 184, 0.08);
+  color: var(--fg);
+}
+
+.tab[aria-pressed="true"],
+.tab[aria-selected="true"] {
+  background: var(--card);
+  color: var(--accent);
+  box-shadow: var(--sh-1);
+}
+
+/* 顶层视图带序号：告诉用户「这是一条流程的第几步」，而不是三个并列的装饰按钮。 */
+.tab-idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tab[aria-pressed="true"] .tab-idx,
+.tab[aria-selected="true"] .tab-idx {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   卡片 / 面板
+   --------------------------------------------------------------------------------------------- */
+.card,
+.panel {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--card);
+  box-shadow: var(--sh-1);
+}
+
+.card {
+  margin-top: 12px;
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.panel-head {
+  margin: 0 0 10px;
+}
+
+.hint {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   按钮：五档语义（默认 / primary / tiny / on / danger-ish），层次靠「填充量」而不是靠颜色数量。
+   ⚠️ 三条不能回退的口径：
+     1. 焦点环用 `:focus-visible` + `outline`，不用 `box-shadow` 单独表达 —— 高对比模式下
+        box-shadow 会被系统关掉，只剩 outline 还能看见焦点在哪。
+     2. 禁用态**不靠颜色**表意（`cursor: not-allowed` + 去饱和 + 掉字重），色盲下也得读出「按不动」。
+     3. 移动端热区 ≥ 44 px 由各页的媒体查询兜（`.page-map button` / `#report button`），
+        桌面这里给 36 px：44 px 的按钮在桌面三栏里会把面板撑得全是按钮、没有内容。
+   --------------------------------------------------------------------------------------------- */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 7px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 550;
+  cursor: pointer;
+  box-shadow: var(--sh-1);
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.08s ease;
+}
+
+button:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: var(--sh-2);
+}
+
+button:active {
+  transform: translateY(1px);
+  box-shadow: var(--sh-1);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+th[data-sort]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  border-color: var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  box-shadow: none;
+  transform: none;
+}
+
+button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+button.primary:hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+button.tiny {
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  box-shadow: none;
+}
+
+/* 开关型按钮（如「在图上选点」）：按下态必须同时改底色**和**描边，
+   否则在灰底上只换个浅底，看不出「现在处于选点模式」。 */
+button.on,
+button[aria-pressed="true"] {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+  box-shadow: inset 0 0 0 1px var(--warn);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  flex-wrap: wrap;
+}
+
+.actions:first-of-type {
+  margin-top: 4px;
+}
+
+input[type="text"],
+select {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+input[type="text"]:hover,
+select:hover {
+  border-color: var(--accent);
+}
+
+input[type="text"]:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.check input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   降级横幅：口径是「警示」而不是「报错」——§6.2 要求零配置首页不出现红色报错。
+   --------------------------------------------------------------------------------------------- */
 .banner {
-  margin: 16px 20px;
-  padding: 14px 16px;
+  margin: 12px 20px 0;
+  padding: 12px 16px;
   border: 1px solid var(--warn-line);
-  border-radius: 10px;
+  border-left: 4px solid var(--warn);
+  border-radius: var(--r-md);
   background: var(--warn-bg);
 }
 
-/* 关键：降级用的是「警示」而不是「报错」——§6.2 要求零配置首页不出现红色报错。 */
 .banner[data-level="ok"] {
   border-color: var(--ok-line);
+  border-left-color: var(--ok);
   background: var(--ok-bg);
 }
 
 .banner h2 {
   margin: 0 0 6px;
-  font-size: 16px;
+  font-size: 15px;
   color: var(--warn);
 }
 
@@ -113,29 +513,6 @@ body {
 
 main {
   padding: 4px 20px 28px;
-}
-
-.card {
-  margin-top: 12px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--card);
-}
-
-.card h2 {
-  margin: 0 0 8px;
-  font-size: 16px;
-}
-
-.hint {
-  margin: 0 0 10px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.table-wrap {
-  overflow-x: auto;
 }
 
 .svc {
@@ -171,35 +548,6 @@ main {
   color: var(--warn);
 }
 
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 12px 0 0;
-  flex-wrap: wrap;
-}
-
-button {
-  padding: 9px 14px;
-  min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--card);
-  color: var(--fg);
-  font: inherit;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: var(--muted);
-}
-
-button:disabled {
-  cursor: progress;
-  opacity: 0.6;
-}
-
 .banner-static {
   margin: 12px 0;
   color: var(--muted);
@@ -208,8 +556,12 @@ button:disabled {
 
 /* FR-413 页脚：链接一行 + 合规声明一到两行。`display:flex` 挂在 `.foot-links` 上而不是
    `.page-foot` 上——声明段落在同一个 flex 容器里会被拉成横向并排的三块。
-   颜色不用 `--muted`：#6b7280 坐在页面底色 #f6f7f9 上是 4.51:1，距 AA 的 4.5 只剩 0.01，
-   而这段是条款 7.3 要的「显著披露」，不该卡在这种余量上。#4b5563 在同一位置实测 7.05:1。 */
+   颜色不用 `--muted`： Fluent 那版 `--muted` 是 #605e5c，坐在 #faf9f8 上是 6.14:1，
+   过线但和正文只差一档；这段是条款 7.3 要的「显著披露」，用 #4b5563（同一处实测 7.19:1）
+   把它压回接近正文的重量。
+   🔴 这两行声明的写法被 `test_footer_disclosure_passes_aa_contrast` 按正则现取现算：
+   它取的是本文件里**第一处** `--bg` 的十六进制，以及 `.page-foot` 那个声明块里的 `color`，
+   所以换底色时把 `--bg` 与 `#4b5563` 一起重算，别只改一个。 */
 .page-foot {
   margin-top: 14px;
   color: #4b5563;
@@ -234,6 +586,11 @@ button:disabled {
   border-bottom: 1px solid var(--line);
 }
 
+.page-foot a:hover {
+  color: var(--accent);
+  border-bottom-color: currentColor;
+}
+
 /* 审图号是「不得删除、掩藏」的专有权利声明（条款 6.6）：用正文色而不是页脚色，
    读取日期说明这串号码有多新，号码本身不该被淡化。 */
 .foot-review {
@@ -244,8 +601,30 @@ button:disabled {
   font-style: italic;
 }
 
+@media (max-width: 768px) {
+  /* 首页没有 isochrone.css 那套 `.page-map` 前缀，热区兜底只能落在这层。
+     🔴 `.tab` 必须**一起**列在这里：`.tab { min-height: 32px }` 是类选择器，权重高于
+     这条 `button` 元素选择器，只写 `button` 的话新加的页签条在手机上仍是 32 px 热区
+     —— PRD §6.3 的 44 px 是「每一个可点的目标」，不是「每一个按钮除了页签」。 */
+  button,
+  .tab {
+    min-height: var(--tap);
+  }
+
+  /* 页脚的政策链接也是手机上的可点目标：地图页的 `.back` 由 isochrone.css 钉过 44 px，
+     这两条是它没覆盖到的那一半，而且两页共用 `.page-foot a`，所以补在这层而不是首页那层。
+     用 `inline-flex` + `min-height` 而不是加 padding：不改字号就能撑出热区，
+     也不会把 13 px 的合规小字放大成「比正文还抢眼」。 */
+  .page-foot a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--tap);
+  }
+}
+
 @media (max-width: 480px) {
   .page-head,
+  .viewbar,
   .banner,
   main {
     padding-left: 14px;
@@ -255,5 +634,23 @@ button:disabled {
   .banner {
     margin-left: 14px;
     margin-right: 14px;
+  }
+
+  .page-head h1 {
+    font-size: 17px;
+  }
+}
+
+/* R15：动效致晕是无条件要避开的，凡是本页新增的过渡都要能被系统偏好关掉。 */
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .tab,
+  input[type="text"],
+  select {
+    transition: none;
+  }
+
+  button:active {
+    transform: none;
   }
 }

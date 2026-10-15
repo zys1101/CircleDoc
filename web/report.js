@@ -1392,9 +1392,15 @@
         }。`;
       }
       // FR-106：手机上把报告浮到地图上方。跑完体检却要滚到页面最底才看到内容，
-      // 现场会被当成「按钮没反应」；桌面是三栏同屏，`openSheet` 内部判过视口，这里无需再判断。
+      // 现场会被当成「按钮没反应」；`openSheet` 内部判过视口，桌面是空操作。
       if (window.CircleDocMap && window.CircleDocMap.openSheet) {
         window.CircleDocMap.openSheet("report");
+      }
+      // 桌面那一侧改由视图层翻到「体检报告」整屏（见 web/shell.js 约束 ②：抽屉态下它自己让位，
+      // 所以这两句不会抢同一块面板）。
+      if (window.CircleDocShell) {
+        // 第二个参数 false：结果异步落地，用户此刻可能正在输入框里打字，别抢焦点。
+        window.CircleDocShell.showView("report", false);
       }
     } catch (error) {
       el.hint.textContent = `体检请求失败：${(error && error.message) || error}`;

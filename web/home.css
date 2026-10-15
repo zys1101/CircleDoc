@@ -1,0 +1,175 @@
+/* CircleDoc 首页（`/` = `web/index.html`）专属版式。
+   ⚠️ 为什么单独一个文件：`app.css` 是「两页都要」的那一层（首页 + 地图页），
+      首页的入口卡显然不该挤进那层，否则地图页要为一堆用不到的规则付权重。
+      口径与 `isochrone.css` / `report.css` 一致：**页面专属的下去，共用的留在 app.css**。
+   🔴 零外链（PRD R12）：这里不出现任何 `@import`、不引外部字体，取值全部走 app.css 的 token。
+      `test_no_external_asset_references` 会连这个文件的 `<link>` 一起算进加载期资源。 */
+
+/* ---------------------------------------------------------------------------------------------
+   宽屏正文列。
+   首页原本一路吃满视口：1440 屏上那张四列服务表被拉到右边看不见、入口卡会排成四条超长横幅。
+   收一条 1120 px 的居中列，页头/横幅/正文三块对齐同一条线。
+
+   ⚠️ 为什么门是 `min-width: 1160px` 而不是复用抽屉那个 769：这条管的是**阅读列宽**，
+      和 FR-106「手机要不要收抽屉」是两件事，凑成同一个数字只会让以后改抽屉断点时误伤首页。
+      1160 = 1120 列 + 两侧各 20 px 内边距；低于这个宽度就让 `app.css` 原有的
+      `padding: … 20px` / `@media (max-width: 480px)` 那套边距说话，不去抢 `margin-left`。
+   --------------------------------------------------------------------------------------------- */
+@media (min-width: 1160px) {
+  .page-home .page-head > .head-row,
+  .page-home .banner,
+  .page-home main {
+    max-width: 1120px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   入口卡：四条去路分成「主入口 + 三条诊断入口」，靠**填充量**分主次而不是靠颜色数量。
+   序号沿用 `.tab-idx` 那套圆点，和地图页顶部视图条是同一个语汇。
+   --------------------------------------------------------------------------------------------- */
+.entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.entry-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--card);
+  color: var(--fg);
+  text-decoration: none;
+  box-shadow: var(--sh-1);
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.08s ease;
+}
+
+.entry-card:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: var(--sh-2);
+  transform: translateY(-1px);
+}
+
+/* 焦点环走 `outline` 而不是 `box-shadow`：高对比模式下系统会关掉 box-shadow，
+   只剩 outline 还能看出光标落在哪张卡上（与 app.css 里按钮的口径同一条）。 */
+.entry-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.entry-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.entry-label {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+
+.entry-desc {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* 路径用等宽字体单独一行：QA 要照着它敲 curl，从一句中文里挑 `/api/cache/stats` 是浪费时间。
+   系统栈，不引外部 mono 字体（R12）。 */
+.entry-path {
+  align-self: flex-start;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink-strong);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px;
+}
+
+.entry-idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.entry-go {
+  color: var(--muted);
+  font-size: 15px;
+  transition: transform 0.12s ease;
+}
+
+.entry-card:hover .entry-go {
+  transform: translateX(2px);
+}
+
+/* 主入口：占满整行、描边与序号都上主色。整页只有它一处用主色填充，
+   所以「点这个去干活」不需要读文案就能看出来。 */
+.entry-primary {
+  grid-column: 1 / -1;
+  border-color: var(--accent);
+}
+
+.entry-primary .entry-label {
+  color: var(--accent);
+}
+
+.entry-primary .entry-idx {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.entry-primary .entry-go {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   移动端：单列堆叠，热区 ≥ 44 px（PRD §6.3）。
+   `app.css` 那条 44 px 兜底只写了 `button, .tab`，入口卡是 `<a>`，不在它的覆盖范围里。
+   --------------------------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .entry-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .entry-card {
+    min-height: var(--tap);
+    padding: 12px;
+  }
+}
+
+/* R15：动效致晕是无条件要避开的，凡是本页新增的过渡都要能被系统偏好关掉。 */
+@media (prefers-reduced-motion: reduce) {
+  .entry-card,
+  .entry-go {
+    transition: none;
+  }
+
+  .entry-card:hover {
+    transform: none;
+  }
+
+  .entry-card:hover .entry-go {
+    transform: none;
+  }
+}

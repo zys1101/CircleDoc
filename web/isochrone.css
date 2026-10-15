@@ -8,9 +8,20 @@
   --poly-fill: rgba(95, 168, 216, 0.25);
   --poly-riding: #2f6f4f;
   --real-path: #b45309;
-  --stage-bg: #eef1f5;
+  --stage-bg: #f4f7fb;
   --stage-line: #d7dde6;
-  --ink-strong: #10141c;
+  /* 「浅色面板 + 深色图区」的那块深色是**图区的边框（bezel）**，不是绘图面本身：
+     等时圈线、盲区填充、POI 标记的配色都写在 `isochrone.js` 的 `BLIND_STYLE` /
+     `DIMENSION_STYLE` 里，同一份值要同时喂给 SVG 舞台和**浅底的 JSAPI 实底图**，
+     还要与图例里的色块一致。把绘图面改成深色就得用 CSS `!important` 去反向覆盖
+     JS 写死的内联属性——三条里任何一条对不上，现场看到的就是「图例说灰、图上是黑」。
+     所以深色只包在外面一圈，绘图面保持浅色。
+     🔴 深色值现在从 app.css 的 `--head-*` 取：页头那条深色带与这块镜框必须是同一组数，
+     两边各留一份十六进制的话，改一处就会漂成「两种黑」，而这两块在地图页是上下相邻的。
+     `--ink-strong` 的本地覆盖一并删掉：它以前钉着旧色板的 #10141c，现在跟着 token 走。 */
+  --map-deep: var(--head-bg);
+  --map-deep-2: var(--head-bg-2);
+  --map-deep-line: var(--head-line);
 }
 
 /* 首页顶栏多出来的「地图引擎」徽标：一眼看出现在是真图还是示意图。 */
@@ -70,21 +81,35 @@
   font-size: 13px;
 }
 
-/* 桌面三栏：参数 / 地图 / 读数。窄屏（769~1100 px，以及移动端无 JS 的降级路径）改纵向堆叠；
-   ≤ 768 px 且有脚本时，三块面板改由文末 FR-106 的底部抽屉接管。 */
+/* 桌面两栏语义：`.layout` 是**外层单列**（工作台 + 报告上下堆叠的降级形态），
+   `.workbench` 才是三栏栅格。这样切的理由只有一条：视图切换靠的是「工作台与报告叠在
+   同一格里」，那件事必须发生在 `.layout`，而三栏栅格留在 `.workbench` 里，
+   于是**没有脚本时**（`shell.js` 没跑起来）页面自然回到「三栏 + 报告在下方」的旧版式，
+   不需要再写一条媒体查询去撤销叠加。 */
 .layout {
   display: grid;
-  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(280px, 360px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   padding: 16px 20px 8px;
 }
 
-/* `.layout` 有**三个轨道但有四个子项**（参数 / 舞台 / 读数 / 报告），所以 `#report` 会掉到
-   第 2 行第 1 列、被 `minmax(260px, 300px)` 压成 300 px 宽，而同一行右边那一格空着。
-   报告里有九列的 POI 表，本来就需要整幅宽度，所以让它横跨最后一行而不是挤进第三列。
-   ≤ 1100 px 时 `.layout` 已经是单列，这条不改变任何东西；移动端抽屉里 `#report`
-   走 `position: fixed`，也不受它影响。 */
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(280px, 360px);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+/* 🔴 以下这段说明与被断言的声明**不能删**：`test_report_panel_spans_the_whole_desktop_grid_row`
+   按顶层规则表取 `.layout > #report` 这条，并要求块里含 `grid-column: 1 / -1`。
+   旧版 `.layout` 有三条轨道、四个子项，`#report` 会掉到第 2 行第 1 列、被
+   `minmax(260px, 300px)` 压成 300 px 宽，九列的 POI 表在 270 px 的内容宽度里要滚 600 px
+   （缺陷 #15 的实测形状）。现在 `.layout` 只剩一条轨道，`1 / -1` 仍然是「横跨整行」，
+   语义没变、作用也没变小——报告面板在两种版式下都吃满整幅宽度。
+   ≤ 1100 px 时单列不改变任何东西；移动端抽屉里 `#report` 走 `position: fixed`，
+   不受它影响（那条规则里**不许**抄 `grid-column`，测试也钉了）。 */
 .layout > #report {
   grid-column: 1 / -1;
 }
@@ -218,50 +243,10 @@ legend {
   color: var(--warn);
 }
 
-input[type="text"],
-select {
-  width: 100%;
-  min-height: 40px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--card);
-  color: var(--fg);
-  font: inherit;
-  font-size: 14px;
-}
-
-.page-map button.tiny {
-  min-height: 32px;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-
-.page-map button.primary {
-  border-color: var(--poly);
-  background: var(--poly);
-  color: #fff;
-}
-
-.page-map button.on {
-  border-color: var(--warn);
-  background: var(--warn-bg);
-  color: var(--warn);
-}
-
-.check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 6px 0;
-  font-size: 13px;
-}
-
-.check input {
-  width: 18px;
-  height: 18px;
-  margin-top: 2px;
-}
+/* `input[type="text"] / select / .check / button.tiny / button.primary / button.on`
+   的基本样式全部在 `app.css`（两页共用那一层）。这里以前各留了一份旧副本，
+   靠「后加载者赢」覆盖掉共享层——于是圆角、描边、hover、focus 环两页各长一半，
+   改一处看不到另一处。去重之后本文件只留**地图页专属**的控件尺寸调整。 */
 
 /* FR-104 类别勾选的口径提示。三态由 `isochrone.js:renderCategoryHint()` 写在 data-state 上，
    颜色不落在 JS 里（改配色不该动判定逻辑）。`hurt` / `none` 会改变结论的可比性，
@@ -284,13 +269,33 @@ select {
   opacity: 0.45;
 }
 
+/* 深色图区（视觉方向那一轮的「浅色面板 + 深色图区」）：深色的那一圈是**镜框**，
+   里面那块绘图面（`#stage` / `#map-live`）保持浅底。理由见文件头 `--map-deep` 那段——
+   多边形 / 盲区 / POI 三组配色由 JS 写死且与浅底的实底图、图例共用同一份值。
+   图例是白卡，坐在深框里正好把「图」和「读图例」这两件事分开。 */
+.stage-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--map-deep-line);
+  border-radius: 16px;
+  background: linear-gradient(160deg, var(--map-deep), var(--map-deep-2));
+}
+
+.stage-wrap .legend {
+  margin-top: 0;
+}
+
 /* 舞台：SVG 与 JSAPI 容器叠在同一块定位区里，永远只有一个可见。 */
 .stage-area {
   position: relative;
   height: clamp(320px, 58vh, 620px);
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--r-md);
   background: var(--stage-bg);
+  box-shadow: 0 8px 22px rgba(8, 12, 18, 0.35);
   overflow: hidden;
 }
 
@@ -705,8 +710,12 @@ table.vertices td.sample.sample-blocked_timeout div:first-child {
   padding: 0 20px 24px;
 }
 
+/* 窄桌面（769~1100 px）三栏放不下：收成一栏，靠**外壳内部滚动**（文末那条
+   `@media (min-width: 769px)`）而不是把整页拉长。目标必须是 `.workbench` 而不是 `.layout`
+   —— 栅格搬到 `.workbench` 之后，`.layout` 本来就只有一条轨道，往它身上再抄一遍
+   等于什么都没做，而三栏会继续挤在 780 px 里。 */
 @media (max-width: 1100px) {
-  .layout {
+  .workbench {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -766,6 +775,41 @@ table.vertices td.sample.sample-blocked_timeout div:first-child {
 .page-map[data-sheet-mode="mobile"] .layout {
   display: block;
   padding: 8px 10px 0;
+}
+
+/* `.workbench` 是栅格外壳（桌面三栏），移动端三块面板都被下面的规则转成 `position: fixed`
+   的抽屉层，留在原位的那个小格子外壳必须退回普通流，否则 300 px 的轨道会把图例挤瘦。 */
+.page-map[data-sheet-mode="mobile"] .workbench {
+  display: block;
+}
+
+/* 顶层视图切换条整条收起：≤768 px 的导航是下面那根把手条，两件事不能同时管同一块面板
+   （`shell.js` 那边会同步把 `<html>` 上的视图属性摘掉，两边各关一半就是「报告被拉出来了
+   但仍然是 invisible」）。把手条的三个按钮里已经有「报告」，功能一个都没少。 */
+.page-map[data-sheet-mode="mobile"] .viewbar {
+  display: none;
+}
+
+/* 抽屉里页签条不许换行：六个页签折成两行要吃掉 ~70 px，而抽屉的封顶就是 66vh。
+   横滑 + `overflow-x: auto` 是这个宽度下唯一既保留全部页签、又不吃地图高度的做法。
+   ⚠️ 这里给 `.tabstrip` 写 `display: flex` 是**覆盖** app.css 的同一属性，
+   所以 `.tabstrip` 上不能用 `[hidden]`（作者规则的 display 权重高于 UA 样式表）。 */
+.page-map[data-sheet-mode="mobile"] .tabstrip {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.page-map[data-sheet-mode="mobile"] .tab {
+  flex: 0 0 auto;
+}
+
+/* 深色镜框在 375 px 上就是 20 px 的地图宽度，收到 6 px；深浅关系与桌面保持同一个读法。 */
+.page-map[data-sheet-mode="mobile"] .stage-wrap {
+  gap: 6px;
+  padding: 6px;
+  border-radius: 12px;
 }
 
 /* 🔴 首屏要让给地图，所以页头/横幅/配额条在移动端必须压扁。这组数值不是拍出来的：
@@ -961,5 +1005,197 @@ table.vertices td.sample.sample-blocked_timeout div:first-child {
   .page-map[data-sheet-mode="mobile"] #readout,
   .page-map[data-sheet-mode="mobile"] #report {
     transition: none;
+  }
+}
+
+/* =============================================================================================
+   「一屏一页」应用外壳（本轮改版的主体）
+
+   三条实现口径，改之前先读：
+
+   1. **这一段整条挂在 `@media (min-width: 769px)` 里**，也就是「抽屉断点 + 1」以上。
+      抽屉的开关是 `body[data-sheet-mode="mobile"]`（`isochrone.js` 按 `matchMedia` 写），
+      768 这个数字的真值全项目只有那一处，本文件不重复写 `(max-width: 768px)`
+      （`test_sheet_breakpoint_has_one_number_and_the_profile_probe_agrees` 专门拦这条）。
+      用 `min-width: 769px` 表达「非移动端」与 report.css 里钉图表宽度的写法同一个口径。
+   2. **外壳的开关是 `html.shell-js`**，由 `isochrone.html` 的 `<head>` 内联脚本打上。
+      没有脚本 → 这个类不存在 → 整套外壳不生效，页面回到「三栏 + 报告在下方」的长页；
+      这与 FR-106「没脚本就没有抽屉」是同一条降级纪律：**凡是靠藏东西换屏效的机制，
+      都必须有一条不依赖脚本的退路**。
+   3. **切页只用 `visibility: hidden`，绝不用 `display: none`。** 舞台尺寸是
+      `resizeStage()` 量 `#stage-area` 的 `getBoundingClientRect()` 得来的，盒子一旦
+      从布局里摘掉就量到 0，等时圈会退回 240×220 的兜底尺寸。`visibility` 保盒子、
+      只关绘制与命中，SVG 与 JSAPI 两条路径都不用管「我刚才被藏起来过」。
+      面板内部的分节（`.group` / `.chunk`）不含需要测量的几何，才由 `shell.js` 用
+      `hidden` 属性关（`app.css` 里那条 `[hidden] { display: none !important }` 兜住）。
+   ============================================================================================= */
+@media (min-width: 769px) {
+  html.shell-js body.page-map {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* 外壳里每一段都要能收缩：flex 子项的 `min-height: auto` 默认值会让长内容把自己顶大，
+     于是「整页滚动」从面板里漏出来——这正是本轮要消灭的东西。 */
+  html.shell-js .page-head,
+  html.shell-js .viewbar,
+  html.shell-js .page-foot {
+    flex: 0 0 auto;
+  }
+
+  /* 横幅 / 配额条有解释长文：封顶后内部滚动，不许把地图往下顶。
+     注意这是**警示不是报错**，两种状态都必须看得见，所以是滚动而不是折叠。 */
+  html.shell-js .banner,
+  html.shell-js .notice {
+    flex: 0 1 auto;
+    max-height: 30vh;
+    margin-top: 8px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  html.shell-js .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 12px 20px;
+    overflow: hidden;
+  }
+
+  /* 两个视图落在**同一格**里靠层叠切换。`.layout` 在栅格化之后只剩一条显式列轨道，
+     所以 `#report` 那条被断言的 `grid-column: 1 / -1` 仍然是「横跨整行」，语义没变。
+     🔴 `.workbench` 必须**同时**写列位置：只写 `grid-row: 1` 的话它会被自动放置到
+     「第 1 行的下一个空格」，于是浏览器为它新开一条隐式列轨道，实测结果是
+     `#report` 被压到 30 px 宽、地图那一栏跑到栅格外侧 —— 隐式轨道不会有任何报错。 */
+  html.shell-js .layout > .workbench {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  html.shell-js .layout > #report {
+    grid-row: 1;
+  }
+
+  html.shell-js .workbench {
+    height: 100%;
+    min-height: 0;
+    align-items: stretch;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* 🔴 不活跃那一页：只关绘制。`visibility: hidden` 的后代即使被别的规则设成
+     `visibility: visible` 也会重新现身，这里没有任何后代这么写，所以一条就够。 */
+  html.shell-js[data-view="map"] .layout > #report {
+    visibility: hidden;
+  }
+
+  html.shell-js[data-view="report"] .layout > .workbench {
+    visibility: hidden;
+  }
+
+  /* 每一栏自己滚，整页不滚。 */
+  html.shell-js .workbench > .panel,
+  html.shell-js .layout > #report {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  html.shell-js .stage-wrap {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* 地图吃满中栏：`clamp(...)` 的旧兜底给无脚本与移动端留着，这里按视口比例给一块
+     确定的高度，图例排在它下面、靠中栏内部滚动看到。 */
+  html.shell-js .stage-area {
+    flex: 0 0 auto;
+    height: clamp(300px, 52vh, 620px);
+  }
+
+  /* 页头压扁：旧版是三行（标题 / 标语 / 徽标各一行），900 px 高的笔记本上光页头就吃 ~200 px。
+     `.head-row` 已经把它们并成一行，这里再收一次内边距。 */
+  html.shell-js .page-head {
+    padding: 10px 20px 8px;
+  }
+
+  html.shell-js .viewbar {
+    padding: 8px 20px;
+  }
+
+  /* 贴边那一侧的容器内边距**必须归零**，间距改由条子自己的 padding 给。
+     原因不是审美：Chrome 把 sticky 的 `top/bottom: 0` 解在滚动容器的**内容盒**上，
+     于是 `.panel` 那 14 px 内边距会在吸顶/吸底条的外侧留出一条同宽的缝，
+     滚动中的正文从缝里被拦腰切过（实测：吸底条下方 14 px 处 hit-test 到的是
+     `fieldset.nested` 正文，而不是面板底色）。两条边各留一个才自洽。 */
+  html.shell-js #readout {
+    padding-top: 0;
+  }
+
+  html.shell-js #controls {
+    padding-bottom: 0;
+  }
+
+  html.shell-js #report {
+    padding-top: 0;
+  }
+
+  /* 上面那条把 `#report` 的顶边距收走了，`.report-head` 自己补回 14 px。
+     写在这里而不是 report.css：移动端没有外壳，那一侧仍由 `#report` 的 `padding: 14px`
+     负责，两条规则不能同时生效。 */
+  html.shell-js #report .report-head {
+    margin-top: 14px;
+  }
+
+  /* 读数栏的进度条**不随分节滚走**：它是一次运行期间唯一在动的东西，
+     被切走就等于「点了没反应」。贴在顶，`.tabstrip` 紧跟其后。 */
+  html.shell-js #readout .panel-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: 0 -14px 10px;
+    padding: 14px 14px 8px;
+    border-bottom: 1px solid var(--line);
+    background: var(--card);
+  }
+
+  /* 主操作条贴在参数栏底部：那一栏最长，「一键体检」滚到中间就找不到了。
+     留在 `#controls` **内部**（不搬进 `.viewbar`）是因为移动端整条顶部导航收起，
+     搬上去等于把手机上的 P0 路径删掉。 */
+  html.shell-js #controls .rail-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin: 0 -14px;
+    padding: 10px 14px 14px;
+    border-top: 1px solid var(--line);
+    background: linear-gradient(var(--card), var(--card));
+  }
+
+  /* 页脚是条款 6.6 / 7.3 唯一落点（审图号、测绘资质、TTL 声明），外壳里它**始终可见**：
+     不是藏进某个视图、也不是 `overflow: hidden` 截掉，只是字号收小一档把高度还给地图。
+     ⚠️ 只改尺寸，不改 `color` —— 页脚文字的 AA 对比度由
+     `test_footer_disclosure_passes_aa_contrast` 现取 app.css 里的十六进制算。 */
+  html.shell-js .page-foot {
+    flex: 0 0 auto;
+    padding: 6px 20px 10px;
+    border-top: 1px solid var(--line);
+    background: var(--card);
+    font-size: 12px;
+  }
+
+  html.shell-js .page-foot p {
+    margin: 3px 0;
   }
 }

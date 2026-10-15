@@ -23,22 +23,60 @@
     <link rel="stylesheet" href="./report.css" />
     <!-- 空 data: 图标：浏览器就不会去要 /favicon.ico（R12 零外链，且验收要求零 404 资源）。 -->
     <link rel="icon" href="data:," />
+    <!--
+      「多页版式」的开关。这一行内联脚本存在的唯一理由：**给 `<html>` 打一个「有脚本」的标记，
+      且必须早于 body 首次绘制**。视图/子页签的隐藏全靠 `html.shell-js` 这个前缀，于是
+        · 有脚本 → 首屏就是「一屏一个视图」，不会先闪一下全部堆叠的长页；
+        · 无脚本 → 类名不存在，所有分组与分节回到正常流里逐段堆叠，读得到也滚得到。
+      与 FR-106 抽屉同一个口径（`data-sheet-mode` 由脚本写，没脚本就没有抽屉）：
+      凡是「靠藏东西换屏效」的机制，都必须有一条不依赖脚本的退路。
+    -->
+    <script>
+      document.documentElement.classList.add("shell-js");
+    </script>
   </head>
   <body class="page-map">
     <header class="page-head">
-      <h1>等时圈地图（M2：FR-201 ~ FR-206）</h1>
-      <p class="sub">
-        <a class="back" href="./index.html">← 返回首页</a>
-        <span>CircleDoc · 15 分钟生活圈体检助手</span>
-      </p>
-      <div class="mode" id="mode-badge" data-mode="unknown">
-        <span class="dot" aria-hidden="true"></span>
-        <span id="mode-text">数据模式：读取中…</span>
-      </div>
-      <div class="engine" id="engine-badge" data-engine="svg">
-        <span id="engine-text">地图引擎：SVG 示意图</span>
+      <div class="head-row">
+        <div class="head-title">
+          <h1>等时圈地图<span class="head-fr">M2 · FR-201 ~ FR-206</span></h1>
+          <p class="sub">
+            <a class="back" href="./index.html">← 返回首页</a>
+            <span>CircleDoc · 15 分钟生活圈体检助手</span>
+          </p>
+        </div>
+        <div class="head-status">
+          <div class="mode" id="mode-badge" data-mode="unknown">
+            <span class="dot" aria-hidden="true"></span>
+            <span id="mode-text">数据模式：读取中…</span>
+          </div>
+          <div class="engine" id="engine-badge" data-engine="svg">
+            <span id="engine-text">地图引擎：SVG 示意图</span>
+          </div>
+        </div>
       </div>
     </header>
+
+    <!--
+      顶层视图切换。刻意做成「两个整屏页」而不是「一屏之上再滚一屏」：
+      报告面板有九列明细表 + 两张图 + 盲区清单，留在文档流里就是把地图顶到首屏之外。
+      ⚠️ 这里只用 `aria-pressed` 的开关语义，不用 `role="tablist"`：地图页由三块面板
+      （`#controls` / `#stage-wrap` / `#readout`）拼成，一个 tab 对不上「一个 tabpanel」，
+      硬套 tablist 就是给读屏一个点不到的面板 id。`#report` 才是真正单块对应的那一侧。
+    -->
+    <nav class="viewbar" aria-label="工作台页面">
+      <div class="tabstrip" data-strip="view">
+        <button type="button" class="tab" data-view="map" aria-pressed="true">
+          <span class="tab-idx" aria-hidden="true">1</span>地图工作台
+        </button>
+        <button type="button" class="tab" data-view="report" aria-pressed="false">
+          <span class="tab-idx" aria-hidden="true">2</span>体检报告
+        </button>
+      </div>
+      <p class="viewbar-note">
+        两页共用同一次 <code>POST /api/analysis</code> 的响应，切页不重新请求、不二次烧配额。
+      </p>
+    </nav>
 
     <!-- FR-105 / FR-101：非实时态必须解释「为什么不是实时数据」，而不是抛错。 -->
     <section class="banner" id="banner" hidden aria-live="polite">
@@ -60,265 +98,315 @@
     </section>
 
     <main class="layout">
-      <section class="panel" id="controls" aria-labelledby="controls-h">
-        <h2 id="controls-h">中心点与参数</h2>
+      <!--
+        工作台 = 桌面三栏的那一屏。`#report` 与它在 `.layout` 里**同处一格**、靠层叠覆盖，
+        所以切到报告页时工作台只是 `visibility: hidden`，**从不 `display: none`**：
+        舞台尺寸由 `resizeStage()` / `sizeSheetStage()` 量 `getBoundingClientRect()` 得出，
+        一旦盒子被从布局里摘掉，量到的就是 0，等时圈会退回 240×220 的兜底尺寸，
+        而 JSAPI 那条路径还要额外补一次 `checkResize()`。`visibility` 保盒子、只关绘制，
+        两个引擎都不用管「我刚才被藏起来过」。
+      -->
+      <div class="workbench" id="workbench">
+        <section class="panel" id="controls" aria-labelledby="controls-h">
+          <div class="panel-head">
+            <h2 id="controls-h">中心点与参数</h2>
+            <div class="tabstrip" data-strip="controls">
+              <button type="button" class="tab" data-group="center">中心点</button>
+              <button type="button" class="tab" data-group="param">参数</button>
+              <button type="button" class="tab" data-group="layer">图层</button>
+            </div>
+          </div>
 
-        <fieldset>
-          <legend>中心点（FR-101：点图选点 / 经纬度 / 地址搜索；按 D7 不做浏览器定位）</legend>
-          <p class="actions">
-            <button
-              type="button"
-              id="pick-point"
-              aria-pressed="false"
-              title="开启后在图上点一处作为中心点"
-            >
-              在图上选点
-            </button>
-            <button type="button" id="recenter" title="把视野回到等时圈范围">回到圈内视野</button>
-          </p>
-          <label class="field">
-            <span>经度 lng（BD09LL）</span>
-            <input type="text" id="lng" inputmode="decimal" autocomplete="off" value="116.4074" />
-          </label>
-          <label class="field">
-            <span>纬度 lat（BD09LL）</span>
-            <input type="text" id="lat" inputmode="decimal" autocomplete="off" value="39.9042" />
-          </label>
-          <p class="actions">
-            <button type="button" id="apply-lnglat">用这组坐标</button>
-            <button type="button" id="reset-center">重置为默认</button>
-          </p>
-          <label class="field">
-            <span>地址文本（走 /api/geocode）</span>
-            <input
-              type="text"
-              id="addr"
-              autocomplete="off"
-              role="combobox"
-              aria-expanded="false"
-              aria-controls="suggest-list"
-              aria-autocomplete="list"
-              placeholder="如 北京市朝阳区温宿路北口"
-            />
-          </label>
-          <label class="field">
-            <span>城市（可选，提高解析精度；开启联想后必填）</span>
-            <input type="text" id="city" autocomplete="off" placeholder="如 北京" />
-          </label>
-          <!-- FR-108：中文联想。**默认关闭**——`/place/v2/suggestion` 与地点检索共用
-               每日 100 次配额（笔记 FAQ 2540 / 2549），开着它等于让输入框替用户烧检索额度。
-               后端还有一道 `SUGGEST_ENABLED`（默认 false），两边任一关着都不会出网。 -->
-          <label class="check">
-            <input type="checkbox" id="suggest-on" />
-            <span>输入联想（FR-108：默认关闭 · 与地点检索共用 100 次/日 配额）</span>
-          </label>
-          <ul class="suggest-list" id="suggest-list" role="listbox" data-state="none"></ul>
-          <p class="actions"><button type="button" id="geocode">地址搜索取点</button></p>
-          <p class="hint" id="center-readout">中心点：未设定。</p>
-          <!-- FR-103：中心点的结构化地址。内容一律来自 /api/regeo 的响应；取不到就照实写取不到，
-               绝不用坐标反推一个「看着像地址」的字符串。 -->
-          <p class="address-line" id="center-address" data-state="none">中心点地址：尚未解析。</p>
+          <div class="group" data-group="center">
+            <fieldset>
+              <legend>中心点（FR-101：点图选点 / 经纬度 / 地址搜索；按 D7 不做浏览器定位）</legend>
+              <p class="actions">
+                <button
+                  type="button"
+                  id="pick-point"
+                  aria-pressed="false"
+                  title="开启后在图上点一处作为中心点"
+                >
+                  在图上选点
+                </button>
+                <button type="button" id="recenter" title="把视野回到等时圈范围">回到圈内视野</button>
+              </p>
+              <label class="field">
+                <span>经度 lng（BD09LL）</span>
+                <input type="text" id="lng" inputmode="decimal" autocomplete="off" value="116.4074" />
+              </label>
+              <label class="field">
+                <span>纬度 lat（BD09LL）</span>
+                <input type="text" id="lat" inputmode="decimal" autocomplete="off" value="39.9042" />
+              </label>
+              <p class="actions">
+                <button type="button" id="apply-lnglat">用这组坐标</button>
+                <button type="button" id="reset-center">重置为默认</button>
+              </p>
+              <label class="field">
+                <span>地址文本（走 /api/geocode）</span>
+                <input
+                  type="text"
+                  id="addr"
+                  autocomplete="off"
+                  role="combobox"
+                  aria-expanded="false"
+                  aria-controls="suggest-list"
+                  aria-autocomplete="list"
+                  placeholder="如 北京市朝阳区温宿路北口"
+                />
+              </label>
+              <label class="field">
+                <span>城市（可选，提高解析精度；开启联想后必填）</span>
+                <input type="text" id="city" autocomplete="off" placeholder="如 北京" />
+              </label>
+              <!-- FR-108：中文联想。**默认关闭**——`/place/v2/suggestion` 与地点检索共用
+                   每日 100 次配额（笔记 FAQ 2540 / 2549），开着它等于让输入框替用户烧检索额度。
+                   后端还有一道 `SUGGEST_ENABLED`（默认 false），两边任一关着都不会出网。 -->
+              <label class="check">
+                <input type="checkbox" id="suggest-on" />
+                <span>输入联想（FR-108：默认关闭 · 与地点检索共用 100 次/日 配额）</span>
+              </label>
+              <ul class="suggest-list" id="suggest-list" role="listbox" data-state="none"></ul>
+              <p class="actions"><button type="button" id="geocode">地址搜索取点</button></p>
+              <p class="hint" id="center-readout">中心点：未设定。</p>
+              <!-- FR-103：中心点的结构化地址。内容一律来自 /api/regeo 的响应；取不到就照实写取不到，
+                   绝不用坐标反推一个「看着像地址」的字符串。 -->
+              <p class="address-line" id="center-address" data-state="none">中心点地址：尚未解析。</p>
 
-          <fieldset class="nested">
-            <legend>浏览器端 AK（只存在本机，用于动态注入 JSAPI）</legend>
-            <label class="field">
-              <span>BAIDU_BROWSER_AK</span>
-              <input type="text" id="browser-ak" autocomplete="off" spellcheck="false" />
-            </label>
-            <p class="actions">
-              <button type="button" id="save-ak">保存到本机</button>
-              <button type="button" id="clear-ak">清除</button>
-            </p>
-            <p class="hint" id="ak-state">未配置：地图走 SVG 示意图。</p>
-          </fieldset>
-        </fieldset>
+              <fieldset class="nested">
+                <legend>浏览器端 AK（只存在本机，用于动态注入 JSAPI）</legend>
+                <label class="field">
+                  <span>BAIDU_BROWSER_AK</span>
+                  <input type="text" id="browser-ak" autocomplete="off" spellcheck="false" />
+                </label>
+                <p class="actions">
+                  <button type="button" id="save-ak">保存到本机</button>
+                  <button type="button" id="clear-ak">清除</button>
+                </p>
+                <p class="hint" id="ak-state">未配置：地图走 SVG 示意图。</p>
+              </fieldset>
+            </fieldset>
 
-        <fieldset>
-          <legend>参数（FR-104 / FR-105）</legend>
-          <label class="field">
-            <span>出行方式（FR-206）</span>
-            <select id="mode">
-              <option value="walking" selected>步行 walking</option>
-              <option value="riding">骑行 riding</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>目标时长（分钟）</span>
-            <select id="minutes">
-              <option value="5">5</option>
-              <option value="10">10</option>
-              <option value="15" selected>15</option>
-              <option value="30">30</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>数据模式（mock = 零真实出网）</span>
-            <select id="data-mode">
-              <option value="" selected>跟随启动探测</option>
-              <option value="live">live 实时</option>
-              <option value="cache">cache 缓存优先</option>
-              <option value="mock">mock 合成示例</option>
-            </select>
-          </label>
+            <fieldset>
+              <legend>预置样例社区（FR-102）</legend>
+              <label class="field">
+                <span>样例社区（同城三种建成形态各一）</span>
+                <select id="sample-select">
+                  <option value="">读取中…</option>
+                </select>
+              </label>
+              <p class="hint" id="sample-note">正在读取 /api/samples…</p>
+            </fieldset>
+          </div>
+
+          <div class="group" data-group="param">
+            <fieldset>
+              <legend>参数（FR-104 / FR-105）</legend>
+              <label class="field">
+                <span>出行方式（FR-206）</span>
+                <select id="mode">
+                  <option value="walking" selected>步行 walking</option>
+                  <option value="riding">骑行 riding</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>目标时长（分钟）</span>
+                <select id="minutes">
+                  <option value="5">5</option>
+                  <option value="10">10</option>
+                  <option value="15" selected>15</option>
+                  <option value="30">30</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>数据模式（mock = 零真实出网）</span>
+                <select id="data-mode">
+                  <option value="" selected>跟随启动探测</option>
+                  <option value="live">live 实时</option>
+                  <option value="cache">cache 缓存优先</option>
+                  <option value="mock">mock 合成示例</option>
+                </select>
+              </label>
+              <!--
+                FR-104 设施类别多选。三条口径写在这里，改动前先读：
+                  1. `data-cat` 的取值与顺序 = 后端 `services/poi_categories.py` 的 `DIMENSION_ORDER`，
+                     勾选框文案 = `DIMENSIONS[key]["label"]`，两边由 tests/test_web_smoke.py 逐一对账。
+                  2. `data-blind-cat` 标记 = 后端 `BLIND_TRIO_SUBCATS`（市场 / 药店 / 小学）实际住在
+                     哪几个维度里。取消这几类会让 FR-221 的盲区判定把「这次没查」当成「附近没有」，
+                     盲区面积被系统性高估 —— 前端在这里同步提示，后端在同一次响应的 `notes` 里
+                     挂同样的警示（`services/analysis.py`），两边各说一遍是因为报告可能离线导出。
+                  3. 全七类勾选时**不传** `categories`（后端缺省即全七类）：传七个键会让同一中心点的
+                     缓存换个键、白烧一次地点检索配额。
+              -->
+              <fieldset class="nested" id="categories">
+                <legend>设施类别（FR-104：勾选的类才检索）</legend>
+                <label class="check">
+                  <input type="checkbox" class="cat" data-cat="medical" data-blind-cat="1" checked />
+                  <span>基础医疗</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" class="cat" data-cat="education" data-blind-cat="1" checked />
+                  <span>教育</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" class="cat" data-cat="market" data-blind-cat="1" checked />
+                  <span>购物市场</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" class="cat" data-cat="leisure" checked />
+                  <span>养老休闲</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" class="cat" data-cat="transit" checked />
+                  <span>公共交通</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" class="cat" data-cat="food" checked />
+                  <span>餐饮服务</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" class="cat" data-cat="service_ref" checked />
+                  <span>便民服务（参考项）</span>
+                </label>
+                <p class="hint">
+                  「便民服务（参考项）」不计分（PRD §4.3），取消它只少一类明细。
+                </p>
+                <p class="hint" id="category-hint" data-state="all">
+                  七类全选 = 不限制类别（后端缺省），盲区面积与总分口径都和类别多选落地前一致。
+                </p>
+                <p class="actions">
+                  <button type="button" id="cat-all">恢复全选</button>
+                </p>
+              </fieldset>
+            </fieldset>
+          </div>
+
+          <div class="group" data-group="layer">
+            <fieldset>
+              <legend>图层开关</legend>
+              <label class="check">
+                <input type="checkbox" id="heat" />
+                <span>耗时热力层（FR-204：网格插值耗时）</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="compare" />
+                <span>叠加对比另一模式多边形（FR-206）</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="show-reference" checked />
+                <span>同半径正圆对照线（FR-201：证明不是正圆）</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="show-pois" checked />
+                <span>设施点位（FR-212：按 6 大维度分色 + 分形状，点击看实测时间）</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="show-blind" checked />
+                <span>服务盲区区域（FR-222：灰＝完全盲区 / 橙＝配套不足，点击看缺失类别与最近设施）</span>
+              </label>
+              <p class="hint" id="layer-hint">热力层与顶点只在有结果后可用。</p>
+            </fieldset>
+          </div>
+
           <!--
-            FR-104 设施类别多选。三条口径写在这里，改动前先读：
-              1. `data-cat` 的取值与顺序 = 后端 `services/poi_categories.py` 的 `DIMENSION_ORDER`，
-                 勾选框文案 = `DIMENSIONS[key]["label"]`，两边由 tests/test_web_smoke.py 逐一对账。
-              2. `data-blind-cat` 标记 = 后端 `BLIND_TRIO_SUBCATS`（市场 / 药店 / 小学）实际住在
-                 哪几个维度里。取消这几类会让 FR-221 的盲区判定把「这次没查」当成「附近没有」，
-                 盲区面积被系统性高估 —— 前端在这里同步提示，后端在同一次响应的 `notes` 里
-                 挂同样的警示（`services/analysis.py`），两边各说一遍是因为报告可能离线导出。
-              3. 全七类勾选时**不传** `categories`（后端缺省即全七类）：传七个键会让同一中心点的
-                 缓存换个键、白烧一次地点检索配额。
+            主操作条留在 `#controls` **内部**而不是顶部导航里，有两个理由：
+              1. 移动端顶部导航整条收起（FR-106 要把首屏让给地图），按钮跟着收起就等于
+                 手机上跑不了体检 —— 那是把 P0 路径改没了。
+              2. `#controls` 在抽屉里是那块浮层，`position: sticky` 的贴底正好是拇指区。
+            两个按钮各是一条独立验收路径，不能合并成一个：`#run` 只算等时圈（M2 的
+            /api/isochrone，不含 POI / 盲区 / 评分），`#run-analysis` 才是一次完整体检。
           -->
-          <fieldset class="nested" id="categories">
-            <legend>设施类别（FR-104：勾选的类才检索）</legend>
-            <label class="check">
-              <input type="checkbox" class="cat" data-cat="medical" data-blind-cat="1" checked />
-              <span>基础医疗</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" class="cat" data-cat="education" data-blind-cat="1" checked />
-              <span>教育</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" class="cat" data-cat="market" data-blind-cat="1" checked />
-              <span>购物市场</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" class="cat" data-cat="leisure" checked />
-              <span>养老休闲</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" class="cat" data-cat="transit" checked />
-              <span>公共交通</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" class="cat" data-cat="food" checked />
-              <span>餐饮服务</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" class="cat" data-cat="service_ref" checked />
-              <span>便民服务（参考项）</span>
-            </label>
-            <p class="hint">
-              「便民服务（参考项）」不计分（PRD §4.3），取消它只少一类明细。
-            </p>
-            <p class="hint" id="category-hint" data-state="all">
-              七类全选 = 不限制类别（后端缺省），盲区面积与总分口径都和类别多选落地前一致。
-            </p>
+          <div class="rail-actions">
             <p class="actions">
-              <button type="button" id="cat-all">恢复全选</button>
+              <button type="button" id="run-analysis" class="primary">一键体检</button>
+              <button type="button" id="run">开始分析</button>
             </p>
-          </fieldset>
-          <p class="actions">
-            <button type="button" id="run" class="primary">开始分析</button>
-            <span class="hint" id="run-hint">尚未运行。</span>
-          </p>
-        </fieldset>
-
-        <fieldset>
-          <legend>预置样例社区（FR-102）</legend>
-          <label class="field">
-            <span>样例社区（同城三种建成形态各一）</span>
-            <select id="sample-select">
-              <option value="">读取中…</option>
-            </select>
-          </label>
-          <p class="hint" id="sample-note">正在读取 /api/samples…</p>
-          <p class="actions">
-            <button type="button" id="run-analysis" class="primary">一键体检</button>
-            <span class="hint" id="analysis-hint">
+            <p class="hint" id="analysis-hint">
               一次请求跑完等时圈 → POI → 盲区 → 评分，并让地图接管等时圈。
-            </span>
-          </p>
-        </fieldset>
+            </p>
+            <p class="hint" id="run-hint">尚未运行。</p>
+          </div>
+        </section>
 
-        <fieldset>
-          <legend>图层开关</legend>
-          <label class="check">
-            <input type="checkbox" id="heat" />
-            <span>耗时热力层（FR-204：网格插值耗时）</span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="compare" />
-            <span>叠加对比另一模式多边形（FR-206）</span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="show-reference" checked />
-            <span>同半径正圆对照线（FR-201：证明不是正圆）</span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="show-pois" checked />
-            <span>设施点位（FR-212：按 6 大维度分色 + 分形状，点击看实测时间）</span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="show-blind" checked />
-            <span>服务盲区区域（FR-222：灰＝完全盲区 / 橙＝配套不足，点击看缺失类别与最近设施）</span>
-          </label>
-          <p class="hint" id="layer-hint">热力层与顶点只在有结果后可用。</p>
-        </fieldset>
-      </section>
+        <section class="stage-wrap" id="stage-wrap">
+          <div class="stage-area" id="stage-area">
+            <!-- JSAPI 4.0 只在条件满足时把 <div id="map-live"> 交给 BMap.Map 渲染；不满足则隐藏。 -->
+            <div id="map-live" hidden></div>
+            <svg id="stage" role="img" aria-label="等时圈示意图舞台"></svg>
+            <div class="stage-tag" id="stage-tag">离线示意图，非真实地图</div>
+            <div class="stage-hint" id="stage-hint"></div>
+            <div class="tooltip" id="tooltip" hidden role="status" aria-live="polite"></div>
+          </div>
+          <div class="legend" id="legend"></div>
+        </section>
 
-      <section class="stage-wrap" id="stage-wrap">
-        <div class="stage-area" id="stage-area">
-          <!-- JSAPI 4.0 只在条件满足时把 <div id="map-live"> 交给 BMap.Map 渲染；不满足则隐藏。 -->
-          <div id="map-live" hidden></div>
-          <svg id="stage" role="img" aria-label="等时圈示意图舞台"></svg>
-          <div class="stage-tag" id="stage-tag">离线示意图，非真实地图</div>
-          <div class="stage-hint" id="stage-hint"></div>
-          <div class="tooltip" id="tooltip" hidden role="status" aria-live="polite"></div>
-        </div>
-        <div class="legend" id="legend"></div>
-      </section>
+        <section class="panel" id="readout" aria-labelledby="progress-h">
+          <div class="panel-head">
+            <h2 id="progress-h">进度（FR-205：已测方向数 / 总数）</h2>
+            <p class="meter" id="progress-text">等待运行。</p>
+            <div class="bar"><i id="progress-fill" style="width: 0%"></i></div>
+            <ul id="progress-stages"></ul>
+          </div>
 
-      <section class="panel" id="readout" aria-labelledby="progress-h">
-        <h2 id="progress-h">进度（FR-205：已测方向数 / 总数）</h2>
-        <p class="meter" id="progress-text">等待运行。</p>
-        <div class="bar"><i id="progress-fill" style="width: 0%"></i></div>
-        <ul id="progress-stages"></ul>
+          <!--
+            进度条**不进页签**：它是一次运行期间唯一在动的东西，被切走就等于「点了没反应」。
+            下面三块（结果 / 计量 / 顶点）都是跑完才看的静态内容，才值得分页。
+          -->
+          <div class="tabstrip" data-strip="readout">
+            <button type="button" class="tab" data-chunk="meta">本次结果</button>
+            <button type="button" class="tab" data-chunk="usage">计量</button>
+            <button type="button" class="tab" data-chunk="vertices">顶点</button>
+          </div>
 
-        <h2>本次结果</h2>
-        <dl class="meta" id="result-meta"></dl>
+          <div class="chunk" data-chunk="meta">
+            <h2>本次结果</h2>
+            <dl class="meta" id="result-meta"></dl>
+          </div>
 
-        <h2>计量（两栏分开，PRD §4.2 第 267 行）</h2>
-        <p class="hint" id="usage-hint">
-          <code>quota_units</code> 按 origins×destinations 折算路线条数，<code>http_requests</code>
-          是实际往返次数；只报后者会把配额低估一个数量级，所以两栏各占一行、永不合并。
-        </p>
-        <div class="table-wrap">
-          <table class="usage" id="usage-table">
-            <tbody></tbody>
-          </table>
-        </div>
+          <div class="chunk" data-chunk="usage">
+            <h2>计量（两栏分开，PRD §4.2 第 267 行）</h2>
+            <p class="hint" id="usage-hint">
+              <code>quota_units</code> 按 origins×destinations 折算路线条数，<code>http_requests</code>
+              是实际往返次数；只报后者会把配额低估一个数量级，所以两栏各占一行、永不合并。
+            </p>
+            <div class="table-wrap">
+              <table class="usage" id="usage-table">
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
 
-        <h2>顶点（FR-203）</h2>
-        <p class="hint" id="polyline-status">
-          点击顶点或表格行内「取真实路径」，才对单个顶点补调 /api/isochrone/polyline（单次上限 12 次）。
-        </p>
-        <div class="table-wrap">
-          <table class="vertices" id="vertices-table">
-            <thead>
-              <tr>
-                <th scope="col">#</th>
-                <th scope="col">方位角</th>
-                <th scope="col">实测耗时</th>
-                <th scope="col">路径距离</th>
-                <th scope="col">采样方式</th>
-                <th scope="col">真实路径</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
+          <div class="chunk" data-chunk="vertices">
+            <h2>顶点（FR-203）</h2>
+            <p class="hint" id="polyline-status">
+              点击顶点或表格行内「取真实路径」，才对单个顶点补调 /api/isochrone/polyline（单次上限 12 次）。
+            </p>
+            <div class="table-wrap">
+              <table class="vertices" id="vertices-table">
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">方位角</th>
+                    <th scope="col">实测耗时</th>
+                    <th scope="col">路径距离</th>
+                    <th scope="col">采样方式</th>
+                    <th scope="col">真实路径</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
 
-        <noscript>
-          <p class="banner-static">
-            未启用 JavaScript：本页的等时圈渲染依赖脚本。可直接访问
-            <code>POST /api/isochrone</code> 取 GeoJSON 多边形。
-          </p>
-        </noscript>
-      </section>
+          <noscript>
+            <p class="banner-static">
+              未启用 JavaScript：本页的等时圈渲染依赖脚本。可直接访问
+              <code>POST /api/isochrone</code> 取 GeoJSON 多边形。
+            </p>
+          </noscript>
+        </section>
+      </div>
 
       <!-- M4 体检报告面板（FR-301 ~ FR-306 / FR-213 / FR-223）。
            数据全部来自 POST /api/analysis 的那一份响应；前端不做任何再计算。
@@ -338,86 +426,111 @@
         </p>
 
         <div id="report-body" hidden>
-          <h3>综合评分</h3>
-          <div class="score-card" id="score-card"></div>
+          <div class="tabstrip" data-strip="report">
+            <button type="button" class="tab" data-chunk="overview">概览</button>
+            <button type="button" class="tab" data-chunk="charts">图表</button>
+            <button type="button" class="tab" data-chunk="poi">设施明细</button>
+            <button type="button" class="tab" data-chunk="blind">服务盲区</button>
+            <button type="button" class="tab" data-chunk="usage">计量与断言</button>
+            <button type="button" class="tab" data-chunk="notes">口径与提示</button>
+          </div>
 
-          <h3>结论摘要（FR-304）</h3>
-          <ul id="summary-list"></ul>
+          <section class="chunk" data-chunk="overview">
+            <h3>综合评分</h3>
+            <div class="score-card" id="score-card"></div>
 
-          <h3>图表（FR-302 雷达图 / FR-303 柱状图）</h3>
-          <div class="charts">
-            <div class="chart-box">
-              <h3>六维得分雷达</h3>
-              <div id="radar-chart"></div>
+            <h3>结论摘要（FR-304）</h3>
+            <ul id="summary-list"></ul>
+          </section>
+
+          <section class="chunk" data-chunk="charts">
+            <h3>图表（FR-302 雷达图 / FR-303 柱状图）</h3>
+            <div class="charts">
+              <div class="chart-box">
+                <h3>六维得分雷达</h3>
+                <div id="radar-chart"></div>
+              </div>
+              <div class="chart-box">
+                <h3>各类设施最近步行时间 vs 阈值</h3>
+                <div id="bar-chart"></div>
+                <p class="hint" id="bar-note"></p>
+              </div>
             </div>
-            <div class="chart-box">
-              <h3>各类设施最近步行时间 vs 阈值</h3>
-              <div id="bar-chart"></div>
-              <p class="hint" id="bar-note"></p>
+          </section>
+
+          <section class="chunk" data-chunk="poi">
+            <h3>设施明细（FR-213）</h3>
+            <div class="poi-toolbar">
+              <label>
+                <span>维度筛选</span>
+                <select id="poi-category">
+                  <option value="">全部维度</option>
+                </select>
+              </label>
+              <span class="hint" id="poi-count"></span>
             </div>
-          </div>
+            <div class="table-wrap">
+              <table class="poi" id="poi-table">
+                <thead>
+                  <tr>
+                    <th scope="col" data-sort="name">名称</th>
+                    <th scope="col" data-sort="category">类别</th>
+                    <th scope="col">官方分类</th>
+                    <th scope="col" data-sort="distance">直线距离</th>
+                    <th scope="col" data-sort="minutes">实测步行时间</th>
+                    <th scope="col" data-sort="polygon">落圈</th>
+                    <th scope="col" data-sort="measured">实测状态</th>
+                    <th scope="col">经度</th>
+                    <th scope="col">纬度</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
 
-          <h3>设施明细（FR-213）</h3>
-          <div class="poi-toolbar">
-            <label>
-              <span>维度筛选</span>
-              <select id="poi-category">
-                <option value="">全部维度</option>
-              </select>
-            </label>
-            <span class="hint" id="poi-count"></span>
-          </div>
-          <div class="table-wrap">
-            <table class="poi" id="poi-table">
-              <thead>
-                <tr>
-                  <th scope="col" data-sort="name">名称</th>
-                  <th scope="col" data-sort="category">类别</th>
-                  <th scope="col">官方分类</th>
-                  <th scope="col" data-sort="distance">直线距离</th>
-                  <th scope="col" data-sort="minutes">实测步行时间</th>
-                  <th scope="col" data-sort="polygon">落圈</th>
-                  <th scope="col" data-sort="measured">实测状态</th>
-                  <th scope="col">经度</th>
-                  <th scope="col">纬度</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
+          <section class="chunk" data-chunk="blind">
+            <h3>服务盲区（FR-221 / FR-222 / FR-223 / FR-224）</h3>
+            <p class="hint" id="blind-summary"></p>
+            <ul class="blind-list" id="blind-list"></ul>
+          </section>
 
-          <h3>服务盲区（FR-221 / FR-222 / FR-223 / FR-224）</h3>
-          <p class="hint" id="blind-summary"></p>
-          <ul class="blind-list" id="blind-list"></ul>
+          <section class="chunk" data-chunk="usage">
+            <h3>计量与预算断言（§6.1 / §6.2）</h3>
+            <p class="hint">
+              三栏分开统计：<code>place_calls</code>（地点检索，最稀缺）、
+              <code>quota_units</code>（按 origins×destinations 折算）、
+              <code>http_requests</code>（真实往返）。混成一个数字会把配额消耗低估一个数量级。
+            </p>
+            <div class="table-wrap">
+              <table class="usage" id="analysis-usage">
+                <tbody></tbody>
+              </table>
+            </div>
+            <p class="hint" id="analysis-assertions"></p>
+          </section>
 
-          <h3>计量与预算断言（§6.1 / §6.2）</h3>
-          <p class="hint">
-            三栏分开统计：<code>place_calls</code>（地点检索，最稀缺）、
-            <code>quota_units</code>（按 origins×destinations 折算）、
-            <code>http_requests</code>（真实往返）。混成一个数字会把配额消耗低估一个数量级。
-          </p>
-          <div class="table-wrap">
-            <table class="usage" id="analysis-usage">
-              <tbody></tbody>
-            </table>
-          </div>
-          <p class="hint" id="analysis-assertions"></p>
+          <section class="chunk" data-chunk="notes">
+            <h3>口径与提示</h3>
+            <ul class="hint" id="analysis-notes"></ul>
+          </section>
 
-          <h3>口径与提示</h3>
-          <ul class="hint" id="analysis-notes"></ul>
-
-          <h3>导出（FR-305）</h3>
-          <p class="actions">
-            <button type="button" id="export-json">导出结果 JSON</button>
-            <button type="button" id="export-csv">导出设施明细 CSV</button>
-            <button type="button" id="export-blind-csv">导出盲区清单 CSV</button>
-            <button type="button" id="export-png">导出报告卡 PNG</button>
+          <!-- 导出是**跨分节**的动作（JSON 是整份响应、CSV 是明细与盲区、PNG 是评分卡），
+               所以它不属于任何一个分节页签，贴在报告页底部常驻。 -->
+          <div class="report-actions">
+            <h3>导出（FR-305）</h3>
+            <p class="actions">
+              <button type="button" id="export-json">导出结果 JSON</button>
+              <button type="button" id="export-csv">导出设施明细 CSV</button>
+              <button type="button" id="export-blind-csv">导出盲区清单 CSV</button>
+              <button type="button" id="export-png">导出报告卡 PNG</button>
+            </p>
             <span class="hint" id="export-hint"></span>
-          </p>
+          </div>
         </div>
       </section>
       <!--
-        FR-106 移动端底部抽屉的把手条。三条口径写在这里：
+        FR-106 移动端底部抽屉的把手条。三条口径写在这里，改动前先读：
           1. **只在 `body[data-sheet-mode="mobile"]` 下出现**，而这个属性由 `isochrone.js` 按
              `matchMedia("(max-width: 768px)")` 设置。桌面是 `display: none`，不用 `hidden` 属性
              是因为 `[hidden]` 会被 `.sheet-bar { display: flex }` 直接盖掉（属性选择器与类选择器
@@ -427,6 +540,10 @@
              不引第三方滑动库（R15 的工程措施）。DOM 不搬家，桌面三栏布局逐字节不变。
           3. 键盘与读屏只走这三个 `button`（`aria-controls` + `aria-expanded` 由 JS 同步）；
              拖拽条 `#sheet-grip` 是 `aria-hidden="true"` 的装饰性增强——它能做的事，按钮都能做。
+        ⚠️ 与顶层视图切换的分工：移动端**没有**「地图 / 报告」两个整屏页，`.viewbar` 整条收起、
+        `shell.js` 也会把 `<html>` 上的视图属性摘掉，报告就是这三个把手之一。
+        两套导航同时接管同一块面板必然打架（一个靠 `visibility`、一个靠 `transform`），
+        所以「谁在移动端说话」必须是唯一答案：把手条。
       -->
       <div class="sheet-bar" id="sheet-bar">
         <button type="button" class="sheet-tab" data-sheet="controls" aria-controls="controls" aria-expanded="false">
@@ -470,5 +587,10 @@
     <!-- M4 报告面板：独立文件，通过 window.CircleDocMap 的接口与地图页协作（见 isochrone.js 末尾）。
          defer 保证它在 isochrone.js 之后执行，这样 `boot()` 已经建好 el/state。 -->
     <script src="./report.js" defer></script>
+    <!--
+      视图与子页签的接线。排在最后：它要在 `boot()` 把 `data-sheet-mode` 写好之后再接手，
+      并且要能在 `window.CircleDocMap` 上问到 `isSheetMobile()`。
+    -->
+    <script src="./shell.js" defer></script>
   </body>
 </html>
