@@ -245,3 +245,126 @@ jobs:
       - name: 清理
         if: always()
         run: docker rm -f circledoc-ci || true
+
+  # FR-408 的验收话术是「一条 `docker compose up` 起得来」，而上面 build job 跑的是
+  # `docker run`。两者差的那一层恰好是 §6.2 最容易翻车的地方：env_file 指向 .env.example
+  # 在第 2 层插值缺失时会不会硬失败、${CIRCLEDOC_HOST_PORT:-8000} 的默认值、./data 的
+  # bind mount 在 Linux 宿主上的 uid 权限（runner 用户恰好是 1000，这条在 CI 里是真验证）、
+  # HEALTHCHECK 继承后 `compose ps` 是否转绿。这些 `docker run` 一个都覆盖不到。
+  compose:
+    name: compose（一键部署实跑）
+    runs-on: ubuntu-latest
+    needs: [build]
+    env:
+      COMPOSE_PROJECT_NAME: circledoc-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验 compose 文件（不启动，只解析）
+        # `config --quiet` 会连带做插值：写错一个 `${}` 语法、env_file 指了不存在的文件，
+        # 都在这里就失败，而不是等 build 完镜像的 60 秒之后。
+        # ⚠️ 此刻仓库里**没有 .env**（全新 checkout 就是干净的），这正是零配置断言的前提。
+        run: docker compose config --quiet
+
+      - name: 构建并起服务
+        # 用 `up -d --build` 而不是 `up -d --wait`：--wait 要 Compose ≥ v2.21（--watch 语义
+        # 更晚），runner 上的版本随镜像更新而变，版本一老这个 step 就变成「未知参数」硬失败。
+        # 下面的轮询循环在任何版本上都成立，而且失败时能打出等待秒数。
+        run: docker compose up -d --build
+
+      - name: 等健康检查转绿
+        run: |
+          set -euo pipefail
+          # 轮询的是 **compose 侧的 health 状态**，不是 curl 能否连上：Dockerfile 的
+          # HEALTHCHECK 带 --start-period=25s，服务 2 秒就能响应、状态却会停在 `starting`
+          # 半分钟。只等 HTTP 响应就断言 healthy 会稳定假失败。
+          for i in $(seq 1 40); do
+            health=$(docker inspect --format '{{.State.Health.Status}}' \
+              "$(docker compose ps -q circledoc)")
+            if [ "$health" = "healthy" ]; then
+              echo "healthy after ${i}x3s"; exit 0
+            fi
+            if [ "$i" = 40 ]; then
+              echo "::error::120s 内健康状态仍为 $health"
+              docker compose logs --no-color || true
+              exit 1
+            fi
+            sleep 3
+          done
+
+      - name: 断言宿主端口可访问
+        # 默认只绑 127.0.0.1:8000（CIRCLEDOC_HOST_IP/PORT 的插值默认值）。这条同时核对了
+        # 「容器内 8000 → 宿主 8000」的映射没被 .env.example 里的 APP_PORT 之类的键带偏。
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:8000/api/health | head -c 600; echo
+
+      - name: 断言 bind mount 方向与宿主目录可写
+        # 这条是 compose 独有的价值，`docker run` 版冒烟测不到：
+        #   1) 从容器内（USER 1000:1000）往 /app/data 写文件，
+        #   2) 在**宿主**的项目目录里读到同一个文件 = 挂载方向正确，
+        #   3) 能写成功 = docker-compose.yml 注释里那条「Linux 宿主要 chown 1000:1000」的
+        #      坑没有复现（GitHub runner 的用户恰好是 uid 1000，所以这里是真·Linux 权限路径）。
+        # 刻意不断言 data/cache.db 存在：缓存层是惰性建库（见 infra/cache_store.py 头注 §3），
+        # mock 报告不一定触发写库，把它当部署断言会变成长期假失败。
+        run: |
+          set -euo pipefail
+          docker compose exec -T circledoc python -c \
+            "open('/app/data/_compose_probe','w').write('mounted')"
+          if [ ! -s data/_compose_probe ]; then
+            echo "::error::容器内写的文件没出现在宿主 ./data（bind mount 未生效）"
+            ls -la data/ || true
+            exit 1
+          fi
+          echo "ok  ./data 双向可见，容器用户可写：$(cat data/_compose_probe)"
+          rm -f data/_compose_probe
+
+      - name: 跑一次体检并确认三栏计量如实为 0
+        # 与 build job 的 `docker run` 冒烟不同：这里走的是 compose 注入的那套 environment
+        # （DATA_MODE=auto、限流阈值、CACHE_DB_PATH=/app/data/cache.db）。断言 mock 报告的
+        # http_requests=0，等于确认「compose 透传的出网预算配置没有把离线路径变成出网路径」。
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:8000/api/health \
+            | python -c "import json,sys; b=json.load(sys.stdin); assert b['data_mode']=='mock', b['data_mode']; print('ok  health data_mode=', b['data_mode'])"
+          curl -fsS -X POST http://127.0.0.1:8000/api/analysis \
+            -H 'content-type: application/json' \
+            -d '{"lnglat":"116.404,39.915","minutes":15,"data_mode":"mock"}' \
+            | python -c "
+          import json, sys
+          b = json.load(sys.stdin)
+          usage = b['usage']
+          assert usage['http_requests'] == 0, usage
+          assert 0 <= b['score']['total'] <= 100, b['score']
+          print('ok  analysis score=', b['score']['total'], b['score']['grade'], '| http_requests=', usage['http_requests'])
+          "
+
+      - name: 断言日志为 LOG_JSON 的单行 JSON
+        # LOG_JSON=true 由 compose 的 environment 透传。这是「可观测」那条验收在容器里的形态：
+        # json-file 驱动 + 单行 JSON，`docker compose logs` 出来就能直接喂给 jq。
+        # ⚠️ 用 --no-log-prefix 去掉 compose 的 `circledoc-1  | ` 前缀，否则每一行都不是合法
+        #    JSON —— 而这恰好是这条断言要抓的东西，不能让它因为前缀变成永久假失败。
+        # 过滤、计数、解析全在 python 里做，不用 grep|head：`set -o pipefail` 下 head 提前关管道
+        # 会让 grep 收到 SIGPIPE 而以非零退出，把一次成功的检查报成失败。
+        run: |
+          set -euo pipefail
+          docker compose logs --no-color --no-log-prefix circledoc \
+            | python -c "
+          import json, sys
+          raw = [l.strip() for l in sys.stdin if l.strip()]
+          jsonl = [l for l in raw if l.startswith('{')]
+          assert jsonl, f'日志里没有 JSON 行（共 {len(raw)} 行，前 3 行：{raw[:3]}）'
+          for l in jsonl:
+              json.loads(l)
+          print('ok  单行 JSON 日志', len(jsonl), '行 / 总', len(raw), '行')
+          "
+
+      - name: 收集 compose 状态与日志
+        if: failure()
+        run: |
+          docker compose ps || true
+          docker compose logs --no-color || true
+
+      - name: 清理
+        if: always()
+        run: docker compose down --volumes --remove-orphans || true

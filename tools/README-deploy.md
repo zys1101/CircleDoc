@@ -109,15 +109,25 @@ env_file:
 
 ## 6. 已知未验证项（本机没有 Docker）
 
-以下都只做了静态校验（`yaml.safe_load`、`bash -n`、`[ScriptBlock]::Create` 解析、
-Dockerfile 指令与上下文路径核对），**没有实机跑过 `docker build` / `docker compose up`**：
+**先说已经不由「本机没有 Docker」挡着的**：`docker build` 与容器内可服务性由 CI 真实跑绿过
+（2026-10-07 起 `build` job：镜像不含 `.db`、不含明文 AK、零 env 起容器 → `HEALTHCHECK` 转绿 →
+`/api/health` + `/api/samples` + `POST /api/analysis` 可服务）。2026-10-15 起 **`docker compose`
+这条路也进了闸**——CI 新增 `compose` job，实跑 `compose config --quiet` → `up -d --build` →
+轮询健康状态转 `healthy` → **容器内以 UID 1000 写 `/app/data`、宿主侧读回同一文件** →
+mock 报告断言 `http_requests == 0` → `logs --no-log-prefix` 逐行 JSON 解析。
+下面这些**仍然只是静态校验**（`yaml.safe_load`、`bash -n`、`[ScriptBlock]::Create` 解析、
+Dockerfile 指令与上下文路径核对），或者**CI 跑绿也证不到**：
 
-- 镜像能否构建成功（`pip install -r requirements.txt` 在 python:3.11-slim 上的 wheel 可得性）。
-- `python:3.11-slim` 基础镜像里 `mkdir`/`chown` 可用（Debian userland，应无问题，但未实测）。
-- 非 root（数字 UID 1000）在 **Linux 宿主**上对 bind mount `./data` 的写权限：宿主用户不是 1000 时
+- **那个 `compose` job 自己是否跑绿**。本地只做到 YAML 解析与 step 清单核对，
+  证据要等 push 之后看 Actions（跑绿前本节不能写成已验）。
+- **宿主用户不是 1000 时**的 bind mount 写权限：CI 的 runner 用户恰好是 uid 1000，
+  所以那条断言测的是「1000 能写」，**测不出「非 1000 写不了」**。宿主用户不是 1000 时
   SQLite 会报 `attempt to write a readonly database`，需要 `sudo chown -R 1000:1000 data`。
   Docker Desktop（Windows / macOS）会自动处理映射，不受影响。
-- 评审机的 Compose 版本与本文件用到的语法子集是否匹配（这里刻意只用 v1/v2 共有的字段，
-  但同样未经实机确认）。
+- **评审机的 Compose 版本**与本文件用到的语法子集是否匹配：这里刻意只用 v1/v2 都成立的写法
+  （例如不用需要 Compose ≥ v2.24 的 `env_file: [{path, required: false}]`，旧版本遇到它是**硬失败**
+  而不是忽略），但 CI 那个 runner 的版本不代表评审机。
+- `python:3.11-slim` 基础镜像里 `mkdir`/`chown` 可用（Debian userland，`build` job 已事实上跑过，
+  留这一条只为说明它不是我们主动验过的项）。
 - 容器内时区：`QUOTA_BREAKER_TZ_OFFSET_HOURS=8` 用固定偏移而不是 tzdata（`infra/config.py` 的既有
-  设计），因此 slim 镜像缺时区库不影响「次日零时」判定；这一点没有实机验证。
+  设计），因此 slim 镜像缺时区库不影响「次日零时」判定；这一点仍是推演，没有实机验证。
